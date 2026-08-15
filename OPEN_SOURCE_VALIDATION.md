@@ -1,6 +1,6 @@
 # AI Talent Radar Open-Source Validation
 
-验证日期：2026-08-15
+验证日期：2026-08-16
 
 ## 交付范围
 
@@ -11,7 +11,7 @@
 - GitHub Actions 跨平台测试、Docker 构建和仓库隐私检查。
 - macOS 登录后自动启动模板和既有 GitHub/Gitee 主页邮箱重新核验工具。
 
-已创建私有 GitHub 仓库：[jiaotao930426-png/ai-talent-radar](https://github.com/jiaotao930426-png/ai-talent-radar)；未发布容器镜像，也未将仓库改为公开。
+当前稳定代码位于公开 GitHub 仓库的 `main` 分支：[jiaotao930426-png/ai-talent-radar](https://github.com/jiaotao930426-png/ai-talent-radar)。本次验收从公开仓库重新取得了 `main` 归档（验收时提交为 `90ba3d0`），未发布容器镜像，也未把本地数据上传到仓库。
 
 ## 数据边界
 
@@ -22,7 +22,7 @@
 
 ## 已完成验证
 
-- 71 项 Python 单元与接口测试已在 GitHub Actions 的 Python 3.11、Ubuntu、macOS 和 Windows 全部通过；本机本轮完成 66 项便携测试，5 个 HTTP 测试改用临时服务流程验证（当前执行环境禁止测试套接字绑定）；
+- 71 项 Python 单元与接口测试已在 GitHub Actions 的 Python 3.11、Ubuntu、macOS 和 Windows 全部通过；本次从公开 `main` 归档在本机 Python 3.9 环境重新执行，71/71 通过；公开归档的 HTTP 流程另以临时回环服务逐项验证；
 - 空数据库首次启动、默认关闭每周任务、配置写入和服务重启持久化通过；
 - 空人才池 Excel 导出可生成有效 `.xlsx`；
 - Excel 的日期、公式注入防护、XML 控制字符清理和原生超链接通过回读测试；
@@ -33,6 +33,13 @@
 - SQLite 连接在上下文退出时会提交或回滚并释放文件句柄，Windows 临时数据库清理不再被文件锁阻塞；自动补跑时间格式不依赖系统 locale；
 - 390 x 844 移动视口未完成自动化验收：Playwright 所需浏览器分发包未安装，后续应用内浏览器访问也被本机安全策略拒绝；不能将移动视口标记为已验证；
 - 新目录未发现数据库、日志、导出文件、疑似凭证或个人绝对路径。
+
+## 2026-08-16 公开归档复测
+
+- 从公开 `main` 重新取得的源码与验收时记录的仓库提交 `90ba3d0c37a7d3eef4eef9337f0ab32144b8ce4b` 一致，工作区无未提交改动。
+- URL 采集（`https://github.com/octocat`）和关键词搜索（`octocat`）均完成；候选人详情、核验字段、联系进度、归档、恢复、永久删除、备份和数据库整理接口均返回成功。
+- HTML 周报返回 200；Excel 下载返回有效 XLSX，包含“候选人总表”和“项目证据”两个工作表、可点击公开链接和邮箱链接。
+- 本机没有 Docker Desktop/ Docker Engine，因此没有声称本机完成 Docker 构建；Windows 启动脚本由 GitHub Actions 的 Windows 检查覆盖，本机未安装 PowerShell，未重复执行脚本解析。
 
 ## 2026-08-15 本机运行验收
 
@@ -51,12 +58,12 @@
 - Docker Compose 配置校验与非 root 镜像构建；
 - 敏感文件、疑似凭证、候选人导出物和个人绝对路径检查。
 
-- CI 结论：全部通过。仓库目前仍保持私有，适合继续做内部 beta；公开仓库前仍需完成干净电脑部署验收并明确确认仓库可见性变更。
+- CI 结论：全部通过。公开 `main` 已完成本机公开归档复测；Docker 构建、Windows 脚本和移动视口仍以 CI/后续设备验收结果为准。
 
 ## 发布结论
 
-- 私有仓库 / 内部 beta：PASS；
-- 正式公开仓库：PASS WITH WARNINGS，尚未执行公开操作；
+- 公开仓库 / 本地部署：PASS WITH WARNINGS；
+- 当前 `main` 可作为稳定公开版本使用；旧 `v1.0.0` 标签仍保留为历史版本，下载最新版应使用默认 `main` 分支或最新稳定标签；
 - 运行服务不应直接暴露到公网：当前产品没有多人登录鉴权，默认只监听本机回环地址。
 
 ## 运行提醒

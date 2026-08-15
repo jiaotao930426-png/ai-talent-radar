@@ -11,7 +11,7 @@
 - GitHub Actions 跨平台测试、Docker 构建和仓库隐私检查。
 - macOS 登录后自动启动模板和既有 GitHub/Gitee 主页邮箱重新核验工具。
 
-本次没有创建或上传 GitHub 仓库，也没有发布容器镜像。
+已创建私有 GitHub 仓库：[jiaotao930426-png/ai-talent-radar](https://github.com/jiaotao930426-png/ai-talent-radar)；未发布容器镜像，也未将仓库改为公开。
 
 ## 数据边界
 
@@ -22,7 +22,7 @@
 
 ## 已完成验证
 
-- 69 项 Python 单元与接口测试全部通过（使用本机 Python 3.12 运行；GitHub Actions 将使用 Python 3.11 再验证）；
+- 71 项 Python 单元与接口测试已在 GitHub Actions 的 Python 3.11、Ubuntu、macOS 和 Windows 全部通过；本机测试覆盖同一套测试（未安装 `openpyxl` 时对应的 2 项可选回读测试跳过）；
 - 空数据库首次启动、默认关闭每周任务、配置写入和服务重启持久化通过；
 - 空人才池 Excel 导出可生成有效 `.xlsx`；
 - Excel 的日期、公式注入防护、XML 控制字符清理和原生超链接通过回读测试；
@@ -30,6 +30,7 @@
 - 桌面视口完成应用内浏览器页面加载、总览、每周任务保存、人才池和数据管理页面交互检查；
 - 当前运行版本与开源副本逐项对照：核心 Python 模块、前端页面、API 路由、SQLite 字段、定时任务、核验/联系进度、报告和导出字段一致；Excel 生成器改为可移植实现，保留双工作表、字段、原生外链和公式安全处理；
 - 已补齐当前版本的 macOS 自动启动能力（使用无个人路径的模板）及既有 GitHub/Gitee 主页邮箱重新核验工具；
+- SQLite 连接在上下文退出时会提交或回滚并释放文件句柄，Windows 临时数据库清理不再被文件锁阻塞；自动补跑时间格式不依赖系统 locale；
 - 390 x 844 移动视口未完成自动化验收：Playwright 所需浏览器分发包未安装，后续应用内浏览器访问也被本机安全策略拒绝；不能将移动视口标记为已验证；
 - 新目录未发现数据库、日志、导出文件、疑似凭证或个人绝对路径。
 
@@ -44,16 +45,22 @@
 - 使用无登录的临时 Edge 浏览器完成桌面关键流程：页面加载、导航切换到“人才池”和健康接口读取均通过。
 - Docker Hub 首次元数据请求曾超时；VPN 恢复后直接拉取基础镜像成功，随后使用本地镜像完成构建。
 
-## 待 CI 验证
+## CI 验证结果
 
-当前验收设备没有 PowerShell，因此未在本机执行 Windows 启动脚本。GitHub Actions 已配置以下门禁：
+当前验收设备没有 PowerShell，因此未在本机执行 Windows 启动脚本。GitHub Actions 运行 [31869245064](https://github.com/jiaotao930426-png/ai-talent-radar/actions/runs/31869245064) 已通过以下门禁：
 
 - Python 3.11 在 Windows、macOS、Linux 的完整测试；
 - PowerShell 与 POSIX 启动脚本解析；
 - Docker Compose 配置校验与非 root 镜像构建；
 - 敏感文件、疑似凭证、候选人导出物和个人绝对路径检查。
 
-在 GitHub CI 首次全部通过前，建议只做私有或内部 beta，不发布公开版本。
+- CI 结论：全部通过。仓库目前仍保持私有，适合继续做内部 beta；公开仓库前仍需完成干净电脑部署验收并明确确认仓库可见性变更。
+
+## 发布结论
+
+- 私有仓库 / 内部 beta：PASS；
+- 正式公开仓库：PASS WITH WARNINGS，尚未执行公开操作；
+- 运行服务不应直接暴露到公网：当前产品没有多人登录鉴权，默认只监听本机回环地址。
 
 ## 运行提醒
 

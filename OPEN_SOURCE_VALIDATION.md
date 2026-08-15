@@ -22,7 +22,7 @@
 
 ## 已完成验证
 
-- 71 项 Python 单元与接口测试已在 GitHub Actions 的 Python 3.11、Ubuntu、macOS 和 Windows 全部通过；本机测试覆盖同一套测试（未安装 `openpyxl` 时对应的 2 项可选回读测试跳过）；
+- 71 项 Python 单元与接口测试已在 GitHub Actions 的 Python 3.11、Ubuntu、macOS 和 Windows 全部通过；本机本轮完成 66 项便携测试，5 个 HTTP 测试改用临时服务流程验证（当前执行环境禁止测试套接字绑定）；
 - 空数据库首次启动、默认关闭每周任务、配置写入和服务重启持久化通过；
 - 空人才池 Excel 导出可生成有效 `.xlsx`；
 - Excel 的日期、公式注入防护、XML 控制字符清理和原生超链接通过回读测试；

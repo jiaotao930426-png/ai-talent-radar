@@ -36,14 +36,11 @@
 
 ## 2026-08-15 本机运行验收
 
-- Docker Desktop 4.86.0、Docker Engine 29.7.2、Docker Compose v5.3.1 已安装并运行；`docker compose config --quiet` 通过。
-- Docker 镜像已成功构建：`ai-talent-radar:local`；构建使用项目声明的 `python:3.11-slim-bookworm` 基础镜像和锁定依赖。
-- 使用项目对应的 Python 3.12 运行完整测试：69/69 通过；使用临时数据库启动服务后，健康接口、总览接口、静态首页和空人才池 Excel 导出均返回成功。
-- 导出的 `.xlsx` 已用 `openpyxl` 回读，包含“候选人总表”和“项目证据”两个工作表；定时配置写入后重启服务仍然保留。
-- 临时 Compose 服务已启动并通过 Docker `HEALTHCHECK`，仅监听 `127.0.0.1:18765`；健康接口、首页、总览、Excel 导出均返回成功，容器重启后定时配置仍保留。
-- 容器以非 root 用户 `radar`（UID/GID 10001）运行，数据卷 `/data` 可写。
-- 使用无登录的临时 Edge 浏览器完成桌面关键流程：页面加载、导航切换到“人才池”和健康接口读取均通过。
-- Docker Hub 首次元数据请求曾超时；VPN 恢复后直接拉取基础镜像成功，随后使用本地镜像完成构建。
+- 当前机器已按此前约定移除 Docker Desktop，未检测到 `docker` 命令；因此本轮没有在本机重跑 Docker Compose 构建或容器启动。
+- 使用项目对应的 Python 3.12 运行开源副本的非端口测试：66/66 通过（包含 `openpyxl` Excel 回读测试）；5 个 HTTP 测试因当前执行环境禁止测试套接字绑定，改用临时端口服务和接口流程逐项验证。
+- 临时数据库服务的健康接口、总览、来源状态、人才池、候选人详情、核验字段保存、联系进度、邮箱复制、HTML 报告和 Excel 导出均返回成功。
+- 导出的 `.xlsx` 已用 `openpyxl` 回读，包含“候选人总表”和“项目证据”两个工作表、原生邮箱/主页链接和日期字段；归档、恢复、备份、永久删除及每周一 10:00 计划也已在临时数据库验证。
+- Docker Compose 配置、非 root 镜像构建和三平台测试仍由 GitHub Actions 工作流覆盖；需要重新验证 Docker 时，应在安装 Docker Desktop/Engine 的机器上执行 README 中的命令。
 
 ## CI 验证结果
 

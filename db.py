@@ -28,6 +28,16 @@ CONTACT_STAGES = {"未联系", "已联系", "已回复", "进入面试", "已发
 PUBLIC_EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
+class ClosingConnection(sqlite3.Connection):
+    """Commit or roll back transactions, then release the SQLite file handle."""
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> Any:
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -73,7 +83,7 @@ def db_path() -> Path:
 def connect() -> sqlite3.Connection:
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(str(path), timeout=30)
+    connection = sqlite3.connect(str(path), timeout=30, factory=ClosingConnection)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")

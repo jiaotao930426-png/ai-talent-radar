@@ -4,6 +4,7 @@ import os
 import re
 import http.client
 import json
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -500,6 +501,13 @@ class DatabaseTests(unittest.TestCase):
         schedule = db.get_schedule()
         schedule["enabled"] = True
         db.save_schedule(schedule, "2099-01-01T09:00:00+08:00")
+
+    def test_connection_context_closes_file_handle(self) -> None:
+        connection = db.connect()
+        with connection:
+            connection.execute("SELECT 1")
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
 
     def test_schedule_retry_is_durable_and_capped(self) -> None:
         self.enable_schedule()

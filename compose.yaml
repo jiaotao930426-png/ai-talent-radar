@@ -1,0 +1,20 @@
+services:
+  talent-radar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai-talent-radar:local
+    restart: unless-stopped
+    environment:
+      TZ: "Asia/Shanghai"
+      TALENT_RADAR_HOST: "0.0.0.0"
+      TALENT_RADAR_PORT: "8765"
+      TALENT_RADAR_DB: "/data/talent_radar.db"
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - talent-radar-data:/data
+
+volumes:
+  talent-radar-data:

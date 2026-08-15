@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>AI 人才雷达</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">AI</span>
+        <div><strong>人才雷达</strong><small>北京 · 重庆</small></div>
+      </div>
+      <nav class="nav" aria-label="主导航">
+        <button class="nav-item active" data-view="overview">总览</button>
+        <button class="nav-item" data-view="manual">手动采集</button>
+        <button class="nav-item" data-view="schedule">每周任务</button>
+        <button class="nav-item" data-view="candidates">人才池</button>
+        <button class="nav-item" data-view="jobs">任务日志</button>
+        <button class="nav-item" data-view="data">数据管理</button>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="serviceDot" class="status-dot"></span>
+        <span id="serviceStatus">检查服务</span>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div>
+          <h1 id="pageTitle">总览</h1>
+          <p id="pageSubtitle">人才采集与审核状态</p>
+        </div>
+        <div class="topbar-actions">
+          <button id="refreshButton" class="button secondary" type="button">刷新</button>
+          <a class="button secondary" href="/export/candidates.xlsx">导出 Excel</a>
+          <a class="button primary" href="/report.html" target="_blank" rel="noopener noreferrer">打开报告</a>
+        </div>
+      </header>
+
+      <main class="content">
+        <section id="view-overview" class="view active" aria-labelledby="pageTitle">
+          <div class="metrics">
+            <div class="metric"><span>人才总数</span><strong id="metricTotal">0</strong></div>
+            <div class="metric"><span>待审核</span><strong id="metricPending">0</strong></div>
+            <div class="metric"><span>优先联系</span><strong id="metricPriority">0</strong></div>
+            <div class="metric"><span>公开邮箱</span><strong id="metricContactable">0</strong></div>
+            <div class="metric contact-metric">
+              <span>公开联系入口</span><strong id="metricDirectContact">0</strong>
+              <small id="metricContactCoverage">覆盖率 0%</small>
+            </div>
+          </div>
+
+          <div class="overview-grid">
+            <section class="panel">
+              <div class="section-heading"><h2>每周任务</h2><span id="overviewScheduleState" class="badge neutral">未启用</span></div>
+              <dl class="schedule-summary">
+                <div><dt>下次运行</dt><dd id="overviewNextRun">—</dd></div>
+                <div><dt>目标数量</dt><dd id="overviewTarget">30 人</dd></div>
+                <div><dt>数据来源</dt><dd id="overviewSources">GitHub、Gitee</dd></div>
+                <div><dt>联系方式优先</dt><dd id="overviewContactPriority" class="badge success">已开启</dd></div>
+              </dl>
+              <button class="text-button" data-go="schedule" type="button">管理每周任务</button>
+            </section>
+
+            <section class="panel">
+              <div class="section-heading"><h2>人才分布</h2></div>
+              <div id="distributionList" class="distribution-list"><p class="empty">暂无候选人</p></div>
+            </section>
+          </div>
+
+          <section class="panel full-width source-health-panel">
+            <div class="section-heading">
+              <div><h2>来源状态</h2><p id="sourceHealthCheckedAt" class="section-meta">尚未检测公开接口</p></div>
+              <button id="sourceHealthButton" class="button secondary" type="button">检测来源</button>
+            </div>
+            <div id="sourceHealthList" class="source-health-list"><p class="empty">正在读取来源能力…</p></div>
+          </section>
+
+          <section class="panel full-width">
+            <div class="section-heading"><h2>最近任务</h2><button class="text-button" data-go="jobs" type="button">查看全部</button></div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>任务</th><th>状态</th><th>进度</th><th>结果</th><th>创建时间</th></tr></thead>
+                <tbody id="overviewJobsBody"><tr><td colspan="5" class="empty-cell">暂无任务</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="view-manual" class="view" aria-labelledby="pageTitle">
+          <form id="manualForm" class="form-layout">
+            <section class="panel form-panel">
+              <div class="section-heading"><h2>采集方式</h2></div>
+              <div class="segmented" role="group" aria-label="采集方式">
+                <button class="segment active" type="button" data-mode="search">条件搜索</button>
+                <button class="segment" type="button" data-mode="url">指定链接</button>
+              </div>
+              <input id="manualMode" type="hidden" value="search">
+
+              <div id="searchFields" class="field-grid">
+                <label class="field"><span>岗位</span>
+                  <select id="manualRole">
+                    <option>AI Agent 工程师</option>
+                    <option>AI Coding 工程师</option>
+                    <option>AI 产品经理</option>
+                  </select>
+                </label>
+                <label class="field"><span>城市</span>
+                  <select id="manualCity"><option>北京</option><option>重庆</option></select>
+                </label>
+                <label class="field"><span>目标数量</span>
+                  <input id="manualTarget" type="number" min="1" max="50" value="10">
+                </label>
+                <label class="field field-wide"><span>关键词</span>
+                  <input id="manualKeywords" type="text" placeholder="留空使用岗位默认关键词，多个关键词用逗号分隔">
+                </label>
+                <div class="field field-wide preference-field">
+                  <strong>优先有公开联系方式</strong>
+                  <label class="switch"><input id="manualPreferContactable" type="checkbox" checked><span></span><b>启用</b></label>
+                </div>
+              </div>
+
+              <div id="urlFields" class="field-grid hidden">
+                <label class="field field-wide"><span>公开主页或项目链接</span>
+                  <input id="manualUrl" type="url" placeholder="https://github.com/username">
+                  <small class="field-help">当前可直接分析 GitHub、Gitee、GitLab、Hugging Face 和 Stack Overflow 的公开链接。</small>
+                </label>
+              </div>
+            </section>
+
+            <section class="panel form-panel">
+              <div class="section-heading"><h2>数据来源</h2></div>
+              <div class="source-groups">
+                <section class="source-group">
+                  <div class="source-group-heading"><strong>开源与模型社区</strong><span class="badge success">自动采集</span></div>
+                  <div class="check-list source-list">
+                    <label><input class="manual-source" type="checkbox" value="github" checked><span><strong>GitHub</strong><small>公开 API、主页和仓库</small></span></label>
+                    <label><input class="manual-source" type="checkbox" value="gitee" checked><span><strong>Gitee</strong><small>国内公开项目和用户资料</small></span></label>
+                    <label><input class="manual-source" type="checkbox" value="gitlab" checked><span><strong>GitLab</strong><small>公开项目、用户资料和活跃度</small></span></label>
+                    <label><input class="manual-source" type="checkbox" value="huggingface" checked><span><strong>Hugging Face</strong><small>公开模型、模型作者和更新时间</small></span></label>
+                  </div>
+                </section>
+                <section class="source-group">
+                  <div class="source-group-heading"><strong>技术论坛</strong><span class="badge success">自动采集</span></div>
+                  <div class="check-list source-list">
+                    <label><input class="manual-source" type="checkbox" value="stackoverflow" checked><span><strong>Stack Overflow</strong><small>AI 问答、作者主页和公开资料</small></span></label>
+                  </div>
+                </section>
+                <section class="source-group planned-sources">
+                  <div class="source-group-heading"><strong>国内社区与社交媒体</strong><span class="badge warning">分阶段接入</span></div>
+                  <p class="source-note">ModelScope、GitCode、掘金、CSDN、SegmentFault、知乎和 B站将优先支持公开链接分析；抖音、小红书和微博仅支持人工粘贴公开链接，不绕过登录或验证码。</p>
+                  <div class="source-chip-list" aria-label="规划中的数据来源">
+                    <span>ModelScope</span><span>GitCode</span><span>掘金</span><span>CSDN</span><span>SegmentFault</span><span>知乎</span><span>B站</span><span>抖音</span><span>小红书</span><span>微博</span>
+                  </div>
+                </section>
+              </div>
+              <div class="form-actions">
+                <button id="manualSubmit" class="button primary" type="submit">立即采集</button>
+              </div>
+            </section>
+          </form>
+        </section>
+
+        <section id="view-schedule" class="view" aria-labelledby="pageTitle">
+          <form id="scheduleForm" class="form-layout">
+            <section class="panel form-panel">
+              <div class="section-heading">
+                <h2>运行计划</h2>
+                <label class="switch"><input id="scheduleEnabled" type="checkbox"><span></span><b>启用</b></label>
+              </div>
+              <div class="field-grid">
+                <label class="field"><span>星期</span>
+                  <select id="scheduleWeekday">
+                    <option value="0">星期一</option><option value="1">星期二</option><option value="2">星期三</option>
+                    <option value="3">星期四</option><option value="4">星期五</option><option value="5">星期六</option><option value="6">星期日</option>
+                  </select>
+                </label>
+                <label class="field"><span>时间</span><input id="scheduleTime" type="time" value="10:00"></label>
+                <label class="field"><span>每周目标</span><input id="scheduleTarget" type="number" min="1" max="50" value="30"></label>
+                <label class="field field-wide"><span>补充关键词</span><input id="scheduleKeywords" type="text" placeholder="留空使用岗位默认关键词"></label>
+              </div>
+              <div class="preference-field">
+                <strong>优先有公开联系方式</strong>
+                <label class="switch"><input id="schedulePreferContactable" type="checkbox" checked><span></span><b>启用</b></label>
+              </div>
+              <div class="next-run"><span>下次运行</span><strong id="scheduleNextRun">未启用</strong></div>
+            </section>
+
+            <section class="panel form-panel">
+              <div class="section-heading"><h2>范围</h2></div>
+              <fieldset><legend>岗位</legend>
+                <div class="inline-checks">
+                  <label><input class="schedule-role" type="checkbox" value="AI Agent 工程师" checked>AI Agent 工程师</label>
+                  <label><input class="schedule-role" type="checkbox" value="AI Coding 工程师" checked>AI Coding 工程师</label>
+                  <label><input class="schedule-role" type="checkbox" value="AI 产品经理" checked>AI 产品经理</label>
+                </div>
+              </fieldset>
+              <fieldset><legend>城市</legend>
+                <div class="inline-checks">
+                  <label><input class="schedule-city" type="checkbox" value="北京" checked>北京</label>
+                  <label><input class="schedule-city" type="checkbox" value="重庆" checked>重庆</label>
+                </div>
+              </fieldset>
+              <fieldset><legend>来源</legend>
+                <div class="inline-checks">
+                  <label><input class="schedule-source" type="checkbox" value="github" checked>GitHub</label>
+                  <label><input class="schedule-source" type="checkbox" value="gitee" checked>Gitee</label>
+                  <label><input class="schedule-source" type="checkbox" value="gitlab">GitLab</label>
+                  <label><input class="schedule-source" type="checkbox" value="huggingface">Hugging Face</label>
+                  <label><input class="schedule-source" type="checkbox" value="stackoverflow">Stack Overflow</label>
+                </div>
+                <p class="field-help">定时任务只提供稳定的公开接口来源；国内内容平台可通过手动链接分析补充。</p>
+              </fieldset>
+              <div class="form-actions"><button class="button primary" type="submit">保存计划</button></div>
+            </section>
+          </form>
+        </section>
+
+        <section id="view-candidates" class="view" aria-labelledby="pageTitle">
+          <div class="filter-bar">
+            <label class="filter-search"><span>搜索</span><input id="candidateSearch" type="search" placeholder="姓名、账号、简介"></label>
+            <label><span>状态</span><select id="candidateStatus"><option>全部</option><option>待审核</option><option>优先联系</option><option>需要核验</option><option>人才储备</option><option>不符合</option></select></label>
+            <label><span>城市</span><select id="candidateCity"><option>全部</option><option>北京</option><option>重庆</option><option>待核验</option></select></label>
+            <label><span>来源</span><select id="candidateSource"><option value="全部">全部</option><option value="github">GitHub</option><option value="gitee">Gitee</option><option value="gitlab">GitLab</option><option value="huggingface">Hugging Face</option><option value="stackoverflow">Stack Overflow</option></select></label>
+            <label><span>联系方式</span><select id="candidateContactability"><option value="all">全部</option><option value="email">有公开邮箱</option><option value="contactable">有公开联系入口</option><option value="profile_only">仅公开主页</option></select></label>
+            <label><span>联系进度</span><select id="candidateContactStage"><option>全部</option><option>未联系</option><option>已联系</option><option>已回复</option><option>进入面试</option><option>已发 Offer</option><option>已录用</option><option>不再推进</option></select></label>
+            <button id="candidateFilterButton" class="button secondary" type="button">筛选</button>
+          </div>
+          <section class="panel full-width">
+            <div class="section-heading"><h2>候选人</h2><span id="candidateCount" class="badge neutral">0 人</span></div>
+            <div class="table-scroll">
+              <table class="candidate-table">
+                <thead><tr><th>候选人</th><th>城市</th><th>岗位</th><th>评分</th><th>最近采集</th><th>联系方式</th><th>联系进度</th><th>审核状态</th><th></th></tr></thead>
+                <tbody id="candidateTableBody"><tr><td colspan="9" class="empty-cell">暂无候选人</td></tr></tbody>
+              </table>
+            </div>
+            <div class="pagination" aria-label="候选人分页">
+              <button id="candidatePrevPage" class="button secondary" type="button">上一页</button>
+              <span id="candidatePageInfo">第 1 / 1 页</span>
+              <button id="candidateNextPage" class="button secondary" type="button">下一页</button>
+            </div>
+          </section>
+        </section>
+
+        <section id="view-jobs" class="view" aria-labelledby="pageTitle">
+          <section class="panel full-width">
+            <div class="section-heading"><h2>采集任务</h2><button id="jobRefreshButton" class="text-button" type="button">刷新</button></div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>ID</th><th>类型</th><th>状态</th><th>进度</th><th>结果</th><th>说明</th><th>创建时间</th><th></th></tr></thead>
+                <tbody id="jobTableBody"><tr><td colspan="8" class="empty-cell">暂无任务</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="view-data" class="view" aria-labelledby="pageTitle">
+          <div class="metrics data-metrics">
+            <div class="metric"><span>在用候选人</span><strong id="dataActiveCandidates">0</strong></div>
+            <div class="metric"><span>已归档</span><strong id="dataArchivedCandidates">0</strong></div>
+            <div class="metric"><span>数据库占用</span><strong id="dataDatabaseSize">0 KB</strong></div>
+            <div class="metric"><span>本地备份</span><strong id="dataBackupCount">0</strong></div>
+          </div>
+
+          <div class="management-grid">
+            <section class="panel">
+              <div class="section-heading"><h2>本地存储</h2><span class="badge success">仅本机</span></div>
+              <dl class="storage-list">
+                <div><dt>项目证据</dt><dd id="dataEvidenceCount">0 条</dd></div>
+                <div><dt>任务日志</dt><dd id="dataJobCount">0 条</dd></div>
+                <div><dt>服务日志</dt><dd id="dataLogSize">0 KB</dd></div>
+                <div><dt>最近备份</dt><dd id="dataLatestBackup">尚未备份</dd></div>
+              </dl>
+              <p class="management-note">备份文件保存在当前数据库目录的 backups 子目录，不会上传到网络。</p>
+              <div class="management-actions">
+                <button id="dataBackupButton" class="button primary" type="button">立即备份</button>
+                <button id="dataVacuumButton" class="button secondary" type="button">整理数据库空间</button>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="section-heading"><h2>批量清理</h2><span class="badge warning">可恢复优先</span></div>
+              <div class="cleanup-options">
+                <div>
+                  <strong>归档所有“不符合”候选人</strong>
+                  <p>从人才池、报告和 Excel 中隐藏，但保留完整资料，可随时恢复。</p>
+                  <button id="archiveNonmatchingButton" class="button secondary" type="button">批量归档</button>
+                </div>
+                <div>
+                  <strong>清理90天前任务日志</strong>
+                  <p>只删除已结束的采集任务记录，不删除候选人及项目证据。</p>
+                  <button id="cleanupJobsButton" class="button secondary" type="button">清理任务日志</button>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <section class="panel full-width">
+            <div class="section-heading"><h2>已归档候选人</h2><span id="archivedCandidateCount" class="badge neutral">0 人</span></div>
+            <div class="table-scroll">
+              <table class="archived-table">
+                <thead><tr><th>候选人</th><th>来源</th><th>城市</th><th>审核状态</th><th>归档时间</th><th>操作</th></tr></thead>
+              <tbody id="archivedCandidateBody"><tr><td colspan="6" class="empty-cell">暂无已归档候选人</td></tr></tbody>
+              </table>
+            </div>
+            <div class="pagination" aria-label="归档候选人分页">
+              <button id="archivedPrevPage" class="button secondary" type="button">上一页</button>
+              <span id="archivedPageInfo">第 1 / 1 页</span>
+              <button id="archivedNextPage" class="button secondary" type="button">下一页</button>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="candidateDialog" class="dialog">
+    <form method="dialog" class="dialog-shell">
+      <div class="dialog-header"><div><h2 id="dialogName">候选人</h2><p id="dialogMeta"></p></div><button class="icon-button" value="cancel" aria-label="关闭" title="关闭">×</button></div>
+      <div class="dialog-body">
+        <div class="detail-actions" id="dialogLinks"></div>
+        <dl class="detail-grid" id="dialogDetails"></dl>
+        <section><h3>项目证据</h3><div id="dialogEvidence" class="evidence-list"></div></section>
+        <section class="candidate-review">
+          <h3>候选人核验</h3>
+          <div class="verification-grid">
+            <label class="field"><span>学历核验</span><select id="dialogEducationVerification"><option>待本人确认</option><option>本科及以上</option><option>不符合</option></select></label>
+            <label class="field"><span>年龄核验</span><select id="dialogAgeStatus"><option>待本人确认</option><option>30岁以下</option><option>不符合</option></select></label>
+            <label class="field"><span>工作地点核验</span><select id="dialogWorkLocationStatus"><option>待本人确认</option><option>接受北京</option><option>接受重庆</option><option>接受北京/重庆</option><option>不接受</option></select></label>
+            <label class="field"><span>Agent 项目核验</span><select id="dialogAgentExperienceStatus"><option>待人工核验</option><option>原创 Agent 项目</option><option>参与 Agent 项目</option><option>仅关键词命中</option><option>无相关经验</option></select></label>
+            <label class="field"><span>联系进度</span><select id="dialogContactStage"><option>未联系</option><option>已联系</option><option>已回复</option><option>进入面试</option><option>已发 Offer</option><option>已录用</option><option>不再推进</option></select></label>
+            <label class="field"><span>审核状态</span><select id="dialogReviewStatus"><option>待审核</option><option>优先联系</option><option>需要核验</option><option>人才储备</option><option>不符合</option></select></label>
+          </div>
+          <label class="field review-note"><span>审核备注</span><textarea id="dialogReviewNote" rows="4" maxlength="2000"></textarea></label>
+        </section>
+      </div>
+      <div class="dialog-footer"><button id="dialogArchive" class="button danger" type="button">归档候选人</button><span class="dialog-footer-spacer"></span><button class="button secondary" value="cancel">取消</button><button id="dialogSave" class="button primary" type="button">保存核验</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js" defer></script>
+</body>
+</html>

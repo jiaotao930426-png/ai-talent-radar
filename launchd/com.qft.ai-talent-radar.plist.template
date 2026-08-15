@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.qft.ai-talent-radar</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON_BIN__</string>
+    <string>__PROJECT_DIR__/app.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_DIR__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONDONTWRITEBYTECODE</key>
+    <string>1</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+    <key>TALENT_RADAR_HOST</key>
+    <string>127.0.0.1</string>
+    <key>TALENT_RADAR_PORT</key>
+    <string>8765</string>
+    <key>TALENT_RADAR_DB</key>
+    <string>__PROJECT_DIR__/data/talent_radar.db</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>__PROJECT_DIR__/data/service.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_DIR__/data/service-error.log</string>
+</dict>
+</plist>

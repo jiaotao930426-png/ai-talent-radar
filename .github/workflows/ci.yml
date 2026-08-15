@@ -1,0 +1,231 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-hygiene:
+    name: Repository privacy checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Reject sensitive or generated files by path
+        shell: bash
+        run: |
+          set -euo pipefail
+          violations=0
+          while IFS= read -r -d '' path; do
+            base="${path##*/}"
+            case "$base" in
+              .env.example|.env.sample|.env.template)
+                continue
+                ;;
+            esac
+            case "$path" in
+              data/*|*/data/*|logs/*|*/logs/*|backups/*|*/backups/*|exports/*|*/exports/*|reports/*|*/reports/*|work/*|*/work/*)
+                violations=$((violations + 1))
+                continue
+                ;;
+            esac
+            case "$base" in
+              .env|.env.*|*.db|*.db-*|*.sqlite|*.sqlite3|*.sqlite-*|*.log|*.pem|*.key|*.p12|*.pfx|*.crt|*.cer|id_rsa|id_ed25519|credentials.json|secrets.json|*.xlsx|*.xls|*.csv|*.tsv)
+                violations=$((violations + 1))
+                ;;
+            esac
+          done < <(git ls-files -z)
+
+          if (( violations > 0 )); then
+            echo "::error::Repository contains ${violations} prohibited sensitive or generated path(s)."
+            exit 1
+          fi
+
+      - name: Reject likely secrets and personal absolute paths
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Build path expressions at runtime so this workflow does not match itself.
+          users_segment="Users"
+          home_segment="home"
+          mac_pattern="/${users_segment}/[A-Za-z0-9._-]+/"
+          linux_pattern="/${home_segment}/[A-Za-z0-9._-]+/"
+          windows_pattern="[A-Za-z]:\\\\${users_segment}\\\\[^\\\\[:space:]]+\\\\"
+          personal_path_pattern="(${mac_pattern}|${linux_pattern}|${windows_pattern})"
+
+          key_segment="KEY"
+          private_key_pattern="-----BEGIN [A-Z ]*PRIVATE ${key_segment}-----"
+          likely_secret_pattern="(${private_key_pattern}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|sk-[A-Za-z0-9]{20,})"
+
+          # Excluded paths are checked by filename above but their contents are never opened.
+          pathspec=(
+            .
+            ':(exclude)data/**'
+            ':(exclude)**/data/**'
+            ':(exclude)logs/**'
+            ':(exclude)**/logs/**'
+            ':(exclude)*.log'
+            ':(exclude)**/*.log'
+            ':(exclude).env'
+            ':(exclude).env.*'
+            ':(exclude)**/.env'
+            ':(exclude)**/.env.*'
+          )
+
+          check_tracked_text() {
+            local pattern="$1"
+            local message="$2"
+            local status
+            set +e
+            git grep -I -q -E "$pattern" -- "${pathspec[@]}"
+            status=$?
+            set -e
+            case "$status" in
+              0)
+                echo "::error::${message}"
+                return 1
+                ;;
+              1)
+                return 0
+                ;;
+              *)
+                echo "::error::Repository privacy scan could not complete."
+                return "$status"
+                ;;
+            esac
+          }
+
+          check_tracked_text \
+            "$personal_path_pattern" \
+            "A personal absolute filesystem path was found in a tracked source file."
+          check_tracked_text \
+            "$likely_secret_pattern" \
+            "A likely credential or private key was found in a tracked source file."
+
+  python-tests:
+    name: Python 3.11 tests (${{ matrix.os }})
+    needs: repository-hygiene
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install pinned runtime dependencies
+        run: python -m pip install --disable-pip-version-check --requirement requirements.txt
+
+      - name: Run unit tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Validate POSIX launcher
+        if: runner.os != 'Windows'
+        shell: sh
+        run: sh -n scripts/start.sh
+
+      - name: Validate PowerShell launcher
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts/start.ps1").Path,
+            [ref] $tokens,
+            [ref] $parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+
+  javascript-syntax:
+    name: JavaScript syntax
+    needs: repository-hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check JavaScript and ECMAScript modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked=0
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+            checked=$((checked + 1))
+          done < <(
+            find . \
+              \( -path './data' -o -path './logs' -o -path './node_modules' \
+                 -o -name '.env' -o -name '.env.*' -o -name '*.log' \) -prune -o \
+              -type f \( -name '*.js' -o -name '*.mjs' \) -print0
+          )
+          if (( checked == 0 )); then
+            echo "::error::No JavaScript files were found to check."
+            exit 1
+          fi
+
+  docker-build:
+    name: Docker build
+    needs: repository-hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build image without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: ai-talent-radar:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

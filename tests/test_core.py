@@ -21,7 +21,7 @@ import app
 import jobs
 import source_health
 from http.server import ThreadingHTTPServer
-from jobs import JobManager, next_weekly_run, normalize_config
+from jobs import JobManager, format_retry_time, next_weekly_run, normalize_config
 from report import generate_report
 from scoring import city_matches, detect_city, score_candidate
 
@@ -191,6 +191,12 @@ class ContactabilityTests(unittest.TestCase):
 
 
 class ScheduleTests(unittest.TestCase):
+    def test_retry_time_format_does_not_depend_on_system_locale(self) -> None:
+        self.assertEqual(
+            format_retry_time("2026-08-15T09:05:00+08:00"),
+            "08月15日 09:05",
+        )
+
     def test_next_weekly_run_moves_to_next_week_after_time_passed(self) -> None:
         monday_after_run = datetime(2026, 7, 27, 10, 0, 0)
         result = next_weekly_run(0, 9, 0, monday_after_run)

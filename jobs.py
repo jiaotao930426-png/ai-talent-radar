@@ -56,6 +56,17 @@ def next_weekly_run(
     return candidate
 
 
+def format_retry_time(value: str) -> str:
+    """Format a retry timestamp without passing non-ASCII text to strftime."""
+    retry_at = datetime.fromisoformat(value)
+    return "{:02d}月{:02d}日 {:02d}:{:02d}".format(
+        retry_at.month,
+        retry_at.day,
+        retry_at.hour,
+        retry_at.minute,
+    )
+
+
 def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     mode = config.get("mode") or "search"
     if mode not in {"search", "url"}:
@@ -155,7 +166,7 @@ class JobManager:
                 error=str(exc),
                 message=(
                     "网络恢复后将在 {} 自动补跑".format(
-                        datetime.fromisoformat(retry_at).strftime("%m月%d日 %H:%M")
+                        format_retry_time(retry_at)
                     )
                     if retry_at
                     else "请检查 VPN 后重试"
@@ -171,7 +182,7 @@ class JobManager:
                 error=str(exc),
                 message=(
                     "将在 {} 自动补跑".format(
-                        datetime.fromisoformat(retry_at).strftime("%m月%d日 %H:%M")
+                        format_retry_time(retry_at)
                     )
                     if retry_at
                     else "来源限制了请求频率，请稍后重试"

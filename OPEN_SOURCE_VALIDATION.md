@@ -39,11 +39,11 @@
 - 从公开 `main` 重新取得的源码与验收时记录的仓库提交 `90ba3d0c37a7d3eef4eef9337f0ab32144b8ce4b` 一致，工作区无未提交改动。
 - URL 采集（`https://github.com/octocat`）和关键词搜索（`octocat`）均完成；候选人详情、核验字段、联系进度、归档、恢复、永久删除、备份和数据库整理接口均返回成功。
 - HTML 周报返回 200；Excel 下载返回有效 XLSX，包含“候选人总表”和“项目证据”两个工作表、可点击公开链接和邮箱链接。
-- 本机没有 Docker Desktop/ Docker Engine，因此没有声称本机完成 Docker 构建；Windows 启动脚本由 GitHub Actions 的 Windows 检查覆盖，本机未安装 PowerShell，未重复执行脚本解析。
+- 本机 Docker Desktop 4.86.0 和 Docker Engine 29.7.2 已启动；公开仓库镜像构建成功，容器健康检查、首页、采集、核验、周报和 Excel 流程均通过，测试容器与临时数据卷已清理。Windows 启动脚本由 GitHub Actions 的 Windows 检查覆盖，本机未安装 PowerShell，未重复执行脚本解析。
 
 ## 2026-08-15 本机运行验收
 
-- 当前机器已按此前约定移除 Docker Desktop，未检测到 `docker` 命令；因此本轮没有在本机重跑 Docker Compose 构建或容器启动。
+- 此前检查时 Docker CLI 未在当前 shell 的 `PATH` 中；本次确认 Docker Desktop 已安装并启动，CLI 位于 `/Applications/Docker.app/Contents/Resources/bin/docker`，并完成 Docker Compose 构建和容器启动验收。
 - 使用项目对应的 Python 3.12 运行开源副本的非端口测试：66/66 通过（包含 `openpyxl` Excel 回读测试）；5 个 HTTP 测试因当前执行环境禁止测试套接字绑定，改用临时端口服务和接口流程逐项验证。
 - 临时数据库服务的健康接口、总览、来源状态、人才池、候选人详情、核验字段保存、联系进度、邮箱复制、HTML 报告和 Excel 导出均返回成功。
 - 导出的 `.xlsx` 已用 `openpyxl` 回读，包含“候选人总表”和“项目证据”两个工作表、原生邮箱/主页链接和日期字段；归档、恢复、备份、永久删除及每周一 10:00 计划也已在临时数据库验证。

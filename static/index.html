@@ -18,6 +18,7 @@
         <button class="nav-item active" data-view="overview">总览</button>
         <button class="nav-item" data-view="manual">手动采集</button>
         <button class="nav-item" data-view="schedule">每周任务</button>
+        <button class="nav-item" data-view="roles">岗位模板</button>
         <button class="nav-item" data-view="candidates">人才池</button>
         <button class="nav-item" data-view="jobs">任务日志</button>
         <button class="nav-item" data-view="data">数据管理</button>
@@ -103,11 +104,7 @@
 
               <div id="searchFields" class="field-grid">
                 <label class="field"><span>岗位</span>
-                  <select id="manualRole">
-                    <option>AI Agent 工程师</option>
-                    <option>AI Coding 工程师</option>
-                    <option>AI 产品经理</option>
-                  </select>
+                  <select id="manualRole" aria-label="选择岗位模板"></select>
                 </label>
                 <label class="field"><span>城市</span>
                   <select id="manualCity"><option>北京</option><option>重庆</option></select>
@@ -119,8 +116,11 @@
                   <input id="manualKeywords" type="text" placeholder="留空使用岗位默认关键词，多个关键词用逗号分隔">
                 </label>
                 <div class="field field-wide preference-field">
-                  <strong>优先有公开联系方式</strong>
-                  <label class="switch"><input id="manualPreferContactable" type="checkbox" checked><span></span><b>启用</b></label>
+                  <div><strong>采集偏好</strong><small class="field-help">联系方式优先和本地语义分析都可按任务单独控制。</small></div>
+                  <div class="preference-controls">
+                    <label class="switch"><input id="manualPreferContactable" type="checkbox" checked><span></span><b>优先有公开联系方式</b></label>
+                    <label class="switch"><input id="manualEnableAI" type="checkbox"><span></span><b>启用本地 AI 分析</b></label>
+                  </div>
                 </div>
               </div>
 
@@ -184,19 +184,20 @@
                 <label class="field field-wide"><span>补充关键词</span><input id="scheduleKeywords" type="text" placeholder="留空使用岗位默认关键词"></label>
               </div>
               <div class="preference-field">
-                <strong>优先有公开联系方式</strong>
-                <label class="switch"><input id="schedulePreferContactable" type="checkbox" checked><span></span><b>启用</b></label>
+                <div><strong>采集偏好</strong><small class="field-help">本地 AI 不可用时，任务会继续使用规则匹配。</small></div>
+                <div class="preference-controls">
+                  <label class="switch"><input id="schedulePreferContactable" type="checkbox" checked><span></span><b>优先有公开联系方式</b></label>
+                  <label class="switch"><input id="scheduleEnableAI" type="checkbox"><span></span><b>启用本地 AI 分析</b></label>
+                </div>
               </div>
               <div class="next-run"><span>下次运行</span><strong id="scheduleNextRun">未启用</strong></div>
             </section>
 
-            <section class="panel form-panel">
-              <div class="section-heading"><h2>范围</h2></div>
-              <fieldset><legend>岗位</legend>
-                <div class="inline-checks">
-                  <label><input class="schedule-role" type="checkbox" value="AI Agent 工程师" checked>AI Agent 工程师</label>
-                  <label><input class="schedule-role" type="checkbox" value="AI Coding 工程师" checked>AI Coding 工程师</label>
-                  <label><input class="schedule-role" type="checkbox" value="AI 产品经理" checked>AI 产品经理</label>
+              <section class="panel form-panel">
+                <div class="section-heading"><h2>范围</h2></div>
+                <fieldset><legend>岗位</legend>
+                <div id="scheduleRoleList" class="inline-checks">
+                  <span class="field-help">正在读取岗位模板…</span>
                 </div>
               </fieldset>
               <fieldset><legend>城市</legend>
@@ -218,6 +219,34 @@
               <div class="form-actions"><button class="button primary" type="submit">保存计划</button></div>
             </section>
           </form>
+        </section>
+
+        <section id="view-roles" class="view" aria-labelledby="pageTitle">
+          <div class="roles-layout">
+            <section class="panel">
+              <div class="section-heading"><h2>岗位模板</h2><button id="roleTemplateRefreshButton" class="text-button" type="button">刷新</button></div>
+              <p class="section-meta">内置模板可停用但不会删除；新模板会用于后续采集任务。</p>
+              <div id="roleTemplateList" class="role-template-list"><p class="empty">正在读取岗位模板…</p></div>
+            </section>
+            <section class="panel">
+              <div class="section-heading"><h2 id="roleTemplateFormTitle">新增岗位模板</h2><button id="roleTemplateCancelButton" class="text-button hidden" type="button">取消编辑</button></div>
+              <form id="roleTemplateForm" class="role-template-form">
+                <input id="roleTemplateId" type="hidden">
+                <label class="field"><span>岗位名称</span><input id="roleTemplateName" required maxlength="80" placeholder="例如：AI 研究工程师"></label>
+                <label class="field"><span>模板标识</span><input id="roleTemplateSlug" maxlength="64" pattern="[a-z0-9][a-z0-9-]{1,63}" placeholder="可选，例如 ai-research-engineer"><small class="field-help">仅限小写字母、数字和连字符；留空时自动生成。</small></label>
+                <label class="field"><span>岗位说明</span><textarea id="roleTemplateDescription" rows="3" maxlength="500" placeholder="岗位职责与筛选重点"></textarea></label>
+                <label class="field"><span>搜索关键词</span><input id="roleTemplateSearchKeywords" placeholder="多个关键词用逗号分隔"></label>
+                <label class="field"><span>同义词</span><input id="roleTemplateSynonyms" placeholder="多个词用逗号分隔"></label>
+                <div class="template-term-grid">
+                  <label class="field"><span>必须技能</span><textarea id="roleTemplateRequiredTerms" rows="3" placeholder="多个词用逗号分隔"></textarea></label>
+                  <label class="field"><span>优选技能</span><textarea id="roleTemplatePreferredTerms" rows="3" placeholder="多个词用逗号分隔"></textarea></label>
+                  <label class="field"><span>项目证据词</span><textarea id="roleTemplateEvidenceTerms" rows="3" placeholder="多个词用逗号分隔"></textarea></label>
+                  <label class="field"><span>排除词</span><textarea id="roleTemplateExcludeTerms" rows="3" placeholder="多个词用逗号分隔"></textarea></label>
+                </div>
+                <div class="form-actions"><button id="roleTemplateSubmit" class="button primary" type="submit">创建模板</button></div>
+              </form>
+            </section>
+          </div>
         </section>
 
         <section id="view-candidates" class="view" aria-labelledby="pageTitle">
@@ -324,6 +353,7 @@
       <div class="dialog-body">
         <div class="detail-actions" id="dialogLinks"></div>
         <dl class="detail-grid" id="dialogDetails"></dl>
+        <section><h3>本地 AI 分析</h3><div id="dialogAiAnalysis" class="ai-analysis"></div></section>
         <section><h3>项目证据</h3><div id="dialogEvidence" class="evidence-list"></div></section>
         <section class="candidate-review">
           <h3>候选人核验</h3>

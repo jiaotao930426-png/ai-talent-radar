@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from contactability import MATCH_HIGH_SCORE, MATCH_MEDIUM_SCORE, derive_contact_level
+from role_templates import builtin_templates, normalize_template
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -90,6 +91,35 @@ def connect() -> sqlite3.Connection:
     return connection
 
 
+def _seed_builtin_role_templates(connection: sqlite3.Connection) -> None:
+    timestamp = now_iso()
+    for template in builtin_templates():
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO role_templates (
+                slug, name, description, is_active, is_builtin, version,
+                synonyms_json, required_terms_json, preferred_terms_json,
+                evidence_terms_json, exclude_terms_json, search_keywords_json,
+                weights_json, created_at, updated_at
+            ) VALUES (?, ?, ?, 1, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                template["slug"],
+                template["name"],
+                template.get("description", ""),
+                json.dumps(template.get("synonyms", []), ensure_ascii=False),
+                json.dumps(template.get("required_terms", []), ensure_ascii=False),
+                json.dumps(template.get("preferred_terms", []), ensure_ascii=False),
+                json.dumps(template.get("evidence_terms", []), ensure_ascii=False),
+                json.dumps(template.get("exclude_terms", []), ensure_ascii=False),
+                json.dumps(template.get("search_keywords", []), ensure_ascii=False),
+                json.dumps(template.get("weights", {}), ensure_ascii=False),
+                timestamp,
+                timestamp,
+            ),
+        )
+
+
 def init_db() -> None:
     schema = """
     CREATE TABLE IF NOT EXISTS candidates (
@@ -108,7 +138,19 @@ def init_db() -> None:
         contact_level TEXT NOT NULL DEFAULT 'D',
         contact_url TEXT NOT NULL DEFAULT '',
         suggested_role TEXT NOT NULL DEFAULT 'AI Agent 工程师',
+        role_template_id INTEGER,
+        role_template_version INTEGER NOT NULL DEFAULT 1,
+        role_template_snapshot_json TEXT NOT NULL DEFAULT '{}',
         match_score INTEGER NOT NULL DEFAULT 0,
+        rule_match_score INTEGER NOT NULL DEFAULT 0,
+        ai_match_score INTEGER,
+        ai_match_status TEXT NOT NULL DEFAULT '未启用',
+        ai_match_confidence REAL,
+        ai_match_reason TEXT NOT NULL DEFAULT '',
+        ai_match_evidence_json TEXT NOT NULL DEFAULT '[]',
+        ai_match_model TEXT NOT NULL DEFAULT '',
+        ai_match_at TEXT,
+        match_breakdown_json TEXT NOT NULL DEFAULT '{}',
         education_status TEXT NOT NULL DEFAULT '待核验',
         education_verification TEXT NOT NULL DEFAULT '待本人确认',
         age_status TEXT NOT NULL DEFAULT '待本人确认',
@@ -174,6 +216,25 @@ def init_db() -> None:
         updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS role_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        slug TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT NOT NULL DEFAULT '',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        is_builtin INTEGER NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL DEFAULT 1,
+        synonyms_json TEXT NOT NULL DEFAULT '[]',
+        required_terms_json TEXT NOT NULL DEFAULT '[]',
+        preferred_terms_json TEXT NOT NULL DEFAULT '[]',
+        evidence_terms_json TEXT NOT NULL DEFAULT '[]',
+        exclude_terms_json TEXT NOT NULL DEFAULT '[]',
+        search_keywords_json TEXT NOT NULL DEFAULT '[]',
+        weights_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_candidates_review ON candidates(review_status);
     CREATE INDEX IF NOT EXISTS idx_candidates_city ON candidates(city);
     CREATE INDEX IF NOT EXISTS idx_candidates_role ON candidates(suggested_role);
@@ -186,6 +247,8 @@ def init_db() -> None:
         "target": 30,
         "keywords": "",
         "prefer_contactable": True,
+        "use_local_ai": False,
+        "enable_ai": False,
     }
     with connect() as connection:
         connection.executescript(schema)
@@ -193,6 +256,18 @@ def init_db() -> None:
             row["name"] for row in connection.execute("PRAGMA table_info(candidates)").fetchall()
         }
         migrations = {
+            "role_template_id": "INTEGER",
+            "role_template_version": "INTEGER NOT NULL DEFAULT 1",
+            "role_template_snapshot_json": "TEXT NOT NULL DEFAULT '{}'",
+            "rule_match_score": "INTEGER NOT NULL DEFAULT 0",
+            "ai_match_score": "INTEGER",
+            "ai_match_status": "TEXT NOT NULL DEFAULT '未启用'",
+            "ai_match_confidence": "REAL",
+            "ai_match_reason": "TEXT NOT NULL DEFAULT ''",
+            "ai_match_evidence_json": "TEXT NOT NULL DEFAULT '[]'",
+            "ai_match_model": "TEXT NOT NULL DEFAULT ''",
+            "ai_match_at": "TEXT",
+            "match_breakdown_json": "TEXT NOT NULL DEFAULT '{}'",
             "education_verification": "TEXT NOT NULL DEFAULT '待本人确认'",
             "work_location_status": "TEXT NOT NULL DEFAULT '待本人确认'",
             "agent_experience_status": "TEXT NOT NULL DEFAULT '待人工核验'",
@@ -203,11 +278,17 @@ def init_db() -> None:
             "contact_email_verified_at": "TEXT",
             "contact_level": "TEXT NOT NULL DEFAULT 'D'",
         }
+        added_candidate_columns = set()
         for column, definition in migrations.items():
             if column not in candidate_columns:
                 connection.execute(
                     "ALTER TABLE candidates ADD COLUMN {} {}".format(column, definition)
                 )
+                added_candidate_columns.add(column)
+        if "rule_match_score" in added_candidate_columns:
+            connection.execute(
+                "UPDATE candidates SET rule_match_score = match_score"
+            )
         schedule_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(schedules)").fetchall()
         }
@@ -226,6 +307,10 @@ def init_db() -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_candidates_contact_level ON candidates(contact_level)"
         )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_candidates_template ON candidates(role_template_id)"
+        )
+        _seed_builtin_role_templates(connection)
         contact_rows = connection.execute(
             """
             SELECT id, profile_url, contact_url, contact_email,
@@ -264,6 +349,146 @@ def init_db() -> None:
 
 def row_to_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
     return dict(row) if row is not None else None
+
+
+ROLE_TEMPLATE_JSON_FIELDS = (
+    "synonyms",
+    "required_terms",
+    "preferred_terms",
+    "evidence_terms",
+    "exclude_terms",
+    "search_keywords",
+    "weights",
+)
+
+
+def _role_template_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    item = dict(row)
+    for field in ROLE_TEMPLATE_JSON_FIELDS:
+        raw = item.pop(field + "_json", "{}" if field == "weights" else "[]")
+        try:
+            item[field] = json.loads(raw or ("{}" if field == "weights" else "[]"))
+        except (TypeError, ValueError):
+            item[field] = {} if field == "weights" else []
+    item["is_active"] = bool(item.get("is_active"))
+    item["is_builtin"] = bool(item.get("is_builtin"))
+    return item
+
+
+def _candidate_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    for source, target, default in (
+        ("role_template_snapshot_json", "role_template_snapshot", {}),
+        ("ai_match_evidence_json", "ai_match_evidence", []),
+        ("match_breakdown_json", "match_breakdown", {}),
+    ):
+        try:
+            item[target] = json.loads(item.get(source) or json.dumps(default))
+        except (TypeError, ValueError):
+            item[target] = default
+    return item
+
+
+def list_role_templates(active_only: bool = False) -> List[Dict[str, Any]]:
+    clause = " WHERE is_active = 1" if active_only else ""
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM role_templates{} ORDER BY is_builtin DESC, name".format(clause)
+        ).fetchall()
+    return [_role_template_dict(row) for row in rows]
+
+
+def active_role_names() -> List[str]:
+    return [item["name"] for item in list_role_templates(active_only=True)]
+
+
+def get_role_template(identifier: Any, require_active: bool = False) -> Optional[Dict[str, Any]]:
+    value = str(identifier or "").strip()
+    if not value:
+        return None
+    clause = " AND is_active = 1" if require_active else ""
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT * FROM role_templates WHERE (CAST(id AS TEXT) = ? OR slug = ? OR name = ?){}".format(clause),
+            (value, value, value),
+        ).fetchone()
+    return _role_template_dict(row)
+
+
+def create_role_template(payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = normalize_template(payload)
+    timestamp = now_iso()
+    with connect() as connection:
+        try:
+            cursor = connection.execute(
+                """
+                INSERT INTO role_templates (
+                    slug, name, description, is_active, is_builtin, version,
+                    synonyms_json, required_terms_json, preferred_terms_json,
+                    evidence_terms_json, exclude_terms_json, search_keywords_json,
+                    weights_json, created_at, updated_at
+                ) VALUES (?, ?, ?, 1, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized["slug"], normalized["name"], normalized.get("description", ""),
+                    json.dumps(normalized.get("synonyms", []), ensure_ascii=False),
+                    json.dumps(normalized.get("required_terms", []), ensure_ascii=False),
+                    json.dumps(normalized.get("preferred_terms", []), ensure_ascii=False),
+                    json.dumps(normalized.get("evidence_terms", []), ensure_ascii=False),
+                    json.dumps(normalized.get("exclude_terms", []), ensure_ascii=False),
+                    json.dumps(normalized.get("search_keywords", []), ensure_ascii=False),
+                    json.dumps(normalized.get("weights", {}), ensure_ascii=False),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("岗位模板 slug 或名称已存在") from exc
+        template_id = cursor.lastrowid
+    return get_role_template(template_id) or {}
+
+
+def update_role_template(identifier: Any, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    current = get_role_template(identifier)
+    if not current:
+        return None
+    normalized = normalize_template(payload, partial=True)
+    merged = dict(current)
+    merged.update(normalized)
+    timestamp = now_iso()
+    assignments = ["slug = ?", "name = ?", "description = ?"]
+    params: List[Any] = [merged["slug"], merged["name"], merged.get("description", "")]
+    for field in ROLE_TEMPLATE_JSON_FIELDS:
+        assignments.append(field + "_json = ?")
+        params.append(json.dumps(merged.get(field, {} if field == "weights" else []), ensure_ascii=False))
+    assignments.extend(["version = version + 1", "updated_at = ?"])
+    params.extend([timestamp, current["id"]])
+    with connect() as connection:
+        try:
+            cursor = connection.execute(
+                "UPDATE role_templates SET {} WHERE id = ?".format(", ".join(assignments)),
+                params,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("岗位模板 slug 或名称已存在") from exc
+    if not cursor.rowcount:
+        return None
+    return get_role_template(current["id"])
+
+
+def set_role_template_active(identifier: Any, active: bool) -> Optional[Dict[str, Any]]:
+    current = get_role_template(identifier)
+    if not current:
+        return None
+    timestamp = now_iso()
+    with connect() as connection:
+        connection.execute(
+            "UPDATE role_templates SET is_active = ?, updated_at = ? WHERE id = ?",
+            (1 if active else 0, timestamp, current["id"]),
+        )
+    return get_role_template(current["id"])
 
 
 def create_job(kind: str, config: Dict[str, Any]) -> int:
@@ -308,7 +533,8 @@ def get_job(job_id: int) -> Optional[Dict[str, Any]]:
             for row in connection.execute(
                 """
                 SELECT c.id, c.display_name, c.username, c.city, c.suggested_role,
-                       c.match_score, c.profile_url, c.review_status, c.contact_level
+                       c.match_score, c.rule_match_score, c.ai_match_score,
+                       c.ai_match_status, c.profile_url, c.review_status, c.contact_level
                 FROM job_candidates jc
                 JOIN candidates c ON c.id = jc.candidate_id
                 WHERE jc.job_id = ?
@@ -400,7 +626,21 @@ def upsert_candidate(candidate: Dict[str, Any], job_id: Optional[int] = None) ->
         "contact_email_verified_at": candidate.get("contact_email_verified_at") or None,
         "contact_url": contact_url,
         "suggested_role": candidate.get("suggested_role") or "AI Agent 工程师",
+        "role_template_id": candidate.get("role_template_id"),
+        "role_template_version": int(candidate.get("role_template_version") or 1),
+        "role_template_snapshot_json": json.dumps(
+            candidate.get("role_template_snapshot") or {}, ensure_ascii=False
+        ),
         "match_score": int(candidate.get("match_score") or 0),
+        "rule_match_score": int(candidate.get("rule_match_score") or candidate.get("match_score") or 0),
+        "ai_match_score": candidate.get("ai_match_score"),
+        "ai_match_status": str(candidate.get("ai_match_status") or "未启用"),
+        "ai_match_confidence": candidate.get("ai_match_confidence"),
+        "ai_match_reason": str(candidate.get("ai_match_reason") or ""),
+        "ai_match_evidence_json": json.dumps(candidate.get("ai_match_evidence") or [], ensure_ascii=False),
+        "ai_match_model": str(candidate.get("ai_match_model") or ""),
+        "ai_match_at": candidate.get("ai_match_at") or None,
+        "match_breakdown_json": json.dumps(candidate.get("match_breakdown") or {}, ensure_ascii=False),
         "education_status": candidate.get("education_status") or "待核验",
         "age_status": candidate.get("age_status") or "待本人确认",
         "source_updated_at": candidate.get("source_updated_at") or "",
@@ -441,10 +681,14 @@ def upsert_candidate(candidate: Dict[str, Any], job_id: Optional[int] = None) ->
                     source, external_id, username, display_name, city, bio, company,
                     profile_url, contact_email, contact_email_source_url,
                     contact_email_verified_at, contact_level, contact_url,
-                    suggested_role, match_score,
+                    suggested_role, role_template_id, role_template_version,
+                    role_template_snapshot_json, match_score, rule_match_score,
+                    ai_match_score, ai_match_status, ai_match_confidence,
+                    ai_match_reason, ai_match_evidence_json, ai_match_model,
+                    ai_match_at, match_breakdown_json,
                     education_status, age_status, first_seen_at, last_seen_at,
                     source_updated_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     fields["source"], fields["external_id"], fields["username"],
@@ -452,7 +696,11 @@ def upsert_candidate(candidate: Dict[str, Any], job_id: Optional[int] = None) ->
                     fields["profile_url"], fields["contact_email"],
                     fields["contact_email_source_url"], fields["contact_email_verified_at"],
                     fields["contact_level"], fields["contact_url"],
-                    fields["suggested_role"], fields["match_score"], fields["education_status"],
+                    fields["suggested_role"], fields["role_template_id"], fields["role_template_version"],
+                    fields["role_template_snapshot_json"], fields["match_score"], fields["rule_match_score"],
+                    fields["ai_match_score"], fields["ai_match_status"], fields["ai_match_confidence"],
+                    fields["ai_match_reason"], fields["ai_match_evidence_json"], fields["ai_match_model"],
+                    fields["ai_match_at"], fields["match_breakdown_json"], fields["education_status"],
                     fields["age_status"], timestamp, timestamp, fields["source_updated_at"],
                     timestamp, timestamp,
                 ),
@@ -466,7 +714,11 @@ def upsert_candidate(candidate: Dict[str, Any], job_id: Optional[int] = None) ->
                     username = ?, display_name = ?, city = ?, bio = ?, company = ?,
                     profile_url = ?, contact_email = ?, contact_email_source_url = ?,
                     contact_email_verified_at = ?, contact_level = ?, contact_url = ?,
-                    suggested_role = ?, match_score = ?, education_status = ?, last_seen_at = ?,
+                    suggested_role = ?, role_template_id = ?, role_template_version = ?,
+                    role_template_snapshot_json = ?, match_score = ?, rule_match_score = ?,
+                    ai_match_score = ?, ai_match_status = ?, ai_match_confidence = ?,
+                    ai_match_reason = ?, ai_match_evidence_json = ?, ai_match_model = ?,
+                    ai_match_at = ?, match_breakdown_json = ?, education_status = ?, last_seen_at = ?,
                     source_updated_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -475,8 +727,12 @@ def upsert_candidate(candidate: Dict[str, Any], job_id: Optional[int] = None) ->
                     fields["company"], fields["profile_url"], fields["contact_email"],
                     fields["contact_email_source_url"], fields["contact_email_verified_at"],
                     fields["contact_level"], fields["contact_url"],
-                    fields["suggested_role"], fields["match_score"],
-                    fields["education_status"], timestamp, fields["source_updated_at"],
+                    fields["suggested_role"], fields["role_template_id"], fields["role_template_version"],
+                    fields["role_template_snapshot_json"], fields["match_score"], fields["rule_match_score"],
+                    fields["ai_match_score"], fields["ai_match_status"], fields["ai_match_confidence"],
+                    fields["ai_match_reason"], fields["ai_match_evidence_json"], fields["ai_match_model"],
+                    fields["ai_match_at"], fields["match_breakdown_json"], fields["education_status"],
+                    timestamp, fields["source_updated_at"],
                     timestamp, candidate_id,
                 ),
             )
@@ -589,16 +845,15 @@ def list_candidates(filters: Dict[str, Any]) -> Dict[str, Any]:
             """.format(where, candidate_order_sql()),
             params + [limit, offset],
         ).fetchall()
-    return {"items": [dict(row) for row in rows], "total": total}
+    return {"items": [_candidate_dict(row) for row in rows], "total": total}
 
 
 def get_candidate(candidate_id: int) -> Optional[Dict[str, Any]]:
     with connect() as connection:
-        candidate = row_to_dict(
-            connection.execute("SELECT * FROM candidates WHERE id = ?", (candidate_id,)).fetchone()
-        )
-        if not candidate:
+        row = connection.execute("SELECT * FROM candidates WHERE id = ?", (candidate_id,)).fetchone()
+        if not row:
             return None
+        candidate = _candidate_dict(row)
         candidate["evidence"] = [
             dict(row)
             for row in connection.execute(
@@ -962,7 +1217,7 @@ def report_candidates() -> List[Dict[str, Any]]:
                 {}
             """.format(candidate_order_sql())
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [_candidate_dict(row) for row in rows]
 
 
 def export_candidates() -> List[Dict[str, Any]]:
@@ -974,7 +1229,7 @@ def export_candidates() -> List[Dict[str, Any]]:
             ORDER BY {}
             """.format(candidate_order_sql())
         ).fetchall()
-        candidates = [dict(row) for row in rows]
+        candidates = [_candidate_dict(row) for row in rows]
         evidence_rows = connection.execute(
             """
             SELECT e.*, c.display_name AS candidate_name

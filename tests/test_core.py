@@ -941,14 +941,24 @@ class JobSelectionTests(unittest.TestCase):
         self.assertEqual(job["status"], "已完成")
         self.assertEqual(job["result_count"], 1)
         self.assertEqual(job["candidates"][0]["username"], "gitee-contact")
-        github_collector.assert_called_once()
-        gitee_collector.assert_called_once()
+        expected_keywords = ["agent", "langgraph", "智能体"]
+        self.assertEqual(
+            [call.args[0] for call in github_collector.call_args_list],
+            expected_keywords,
+        )
+        self.assertEqual(
+            [call.args[0] for call in gitee_collector.call_args_list],
+            expected_keywords,
+        )
 
     def test_contact_priority_can_be_disabled(self) -> None:
         job, _, gitee_collector = self.run_selection(False)
 
         self.assertEqual(job["candidates"][0]["username"], "github-top")
-        gitee_collector.assert_called_once()
+        self.assertEqual(
+            [call.args[0] for call in gitee_collector.call_args_list],
+            ["agent", "langgraph", "智能体"],
+        )
 
     def test_existing_verified_email_is_reused_before_selection(self) -> None:
         known = self.candidate("gitee", "known-contact", 75)

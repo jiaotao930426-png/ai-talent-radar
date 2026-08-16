@@ -20,6 +20,8 @@ from collectors import (
     suppress_shared_public_emails,
 )
 from scoring import keyword_for_role
+from scoring import score_candidate, template_match_breakdown
+from ollama_matcher import OllamaUnavailable, combine_scores, match_candidate
 
 
 ALLOWED_ROLES = ("AI Agent 工程师", "AI Coding 工程师", "AI 产品经理")
@@ -67,7 +69,38 @@ def format_retry_time(value: str) -> str:
     )
 
 
-def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_config(
+    config: Dict[str, Any],
+    strict_roles: bool = False,
+    allow_role_snapshots: bool = False,
+) -> Dict[str, Any]:
+    return _normalize_config(
+        config,
+        strict_roles=strict_roles,
+        allow_role_snapshots=allow_role_snapshots,
+    )
+
+
+def _snapshots_by_role(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    snapshots: Dict[str, Dict[str, Any]] = {}
+    raw_snapshots = config.get("role_template_snapshots") or []
+    if not isinstance(raw_snapshots, list):
+        return snapshots
+    for item in raw_snapshots:
+        if not isinstance(item, dict) or not isinstance(item.get("snapshot"), dict):
+            continue
+        snapshot = dict(item["snapshot"])
+        name = str(item.get("name") or snapshot.get("name") or "").strip()
+        if name:
+            snapshots[name] = snapshot
+    return snapshots
+
+
+def _normalize_config(
+    config: Dict[str, Any],
+    strict_roles: bool = False,
+    allow_role_snapshots: bool = False,
+) -> Dict[str, Any]:
     mode = config.get("mode") or "search"
     if mode not in {"search", "url"}:
         raise ValueError("无效的采集方式")
@@ -75,7 +108,39 @@ def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     roles = config.get("roles") or [config.get("role") or "AI Agent 工程师"]
     cities = config.get("cities") or [config.get("city") or "北京"]
     sources = config.get("sources") or ["github"]
-    roles = [role for role in roles if role in ALLOWED_ROLES] or ["AI Agent 工程师"]
+    preserved_snapshots = _snapshots_by_role(config) if allow_role_snapshots else {}
+    try:
+        allowed_roles = list(db.active_role_names())
+    except Exception:
+        allowed_roles = list(ALLOWED_ROLES)
+    if allow_role_snapshots:
+        for role in preserved_snapshots:
+            if role not in allowed_roles:
+                allowed_roles.append(role)
+    if not allowed_roles:
+        raise ValueError("当前没有启用的岗位模板，请先启用或创建岗位模板")
+    unknown_roles = [role for role in roles if role not in allowed_roles]
+    if strict_roles and unknown_roles:
+        raise ValueError("岗位模板不存在或已停用：{}".format("、".join(map(str, unknown_roles))))
+    roles = [role for role in roles if role in allowed_roles] or [allowed_roles[0]]
+    role_template_snapshots: List[Dict[str, Any]] = []
+    for role in roles:
+        template = preserved_snapshots.get(role)
+        if template is None:
+            try:
+                template = db.get_role_template(role, require_active=True)
+            except Exception:
+                template = None
+        if template:
+            role_template_snapshots.append(
+                {
+                    "id": template["id"],
+                    "name": template["name"],
+                    "slug": template["slug"],
+                    "version": template["version"],
+                    "snapshot": template,
+                }
+            )
     cities = [city for city in cities if city in ALLOWED_CITIES] or ["北京"]
     sources = [source for source in sources if source in ALLOWED_SOURCES] or ["github"]
     keywords = str(config.get("keywords") or "").strip()
@@ -83,6 +148,9 @@ def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     prefer_contactable = config.get("prefer_contactable", True)
     if not isinstance(prefer_contactable, bool):
         raise ValueError("联系方式优先设置必须为布尔值")
+    raw_ai = config.get("use_local_ai", config.get("enable_ai", config.get("ai_enabled", False)))
+    if not isinstance(raw_ai, bool):
+        raise ValueError("本地 AI 设置必须为布尔值")
     return {
         "mode": mode,
         "target": target,
@@ -92,6 +160,9 @@ def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
         "keywords": keywords,
         "url": url,
         "prefer_contactable": prefer_contactable,
+        "use_local_ai": raw_ai,
+        "enable_ai": raw_ai,
+        "role_template_snapshots": role_template_snapshots,
     }
 
 
@@ -104,6 +175,96 @@ def rank_candidates(
         candidates,
         key=lambda candidate: candidate_priority_key(candidate, prefer_contactable),
     )
+
+
+def _template_for_role(
+    role: str, config: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
+    if config:
+        snapshot = _snapshots_by_role(config).get(role)
+        if snapshot:
+            return snapshot
+    try:
+        return db.get_role_template(role, require_active=True)
+    except Exception:
+        return None
+
+
+def _prepare_candidate(
+    candidate: Dict[str, Any],
+    role: str,
+    city: str,
+    use_local_ai: bool,
+    role_template: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Apply the selected template, then optionally enrich the match locally."""
+    template = role_template or _template_for_role(role)
+    evidence = candidate.get("evidence") or []
+    can_reuse_existing_rule = bool(
+        template
+        and template.get("is_builtin")
+        and int(template.get("version") or 1) == 1
+        and candidate.get("rule_match_score") is not None
+    )
+    if can_reuse_existing_rule:
+        rule_score = int(candidate.get("rule_match_score") or 0)
+        suggested_role = role
+        ranked = (candidate.get("_legacy_ranked_evidence") or evidence)[:6]
+    elif (
+        not candidate.get("bio")
+        and not candidate.get("company")
+        and not evidence
+        and candidate.get("match_score") is not None
+    ):
+        # Preserve collector/test supplied scores for minimal records that have
+        # no evidence to re-score. Real profile collectors provide rule score.
+        rule_score = int(candidate.get("match_score") or 0)
+        suggested_role = role
+        ranked = evidence[:6]
+    else:
+        rule_score, suggested_role, ranked = score_candidate(
+            candidate, evidence, role, city, role_template=template
+        )
+    candidate["rule_match_score"] = rule_score
+    candidate["match_score"] = rule_score
+    candidate["suggested_role"] = suggested_role
+    candidate["evidence"] = ranked
+    if template:
+        candidate["role_template_id"] = template["id"]
+        candidate["role_template_version"] = template["version"]
+        candidate["role_template_snapshot"] = template
+        candidate["match_breakdown"] = template_match_breakdown(candidate, evidence, template)
+    else:
+        candidate["match_breakdown"] = {}
+    candidate["ai_match_status"] = "未启用"
+    candidate["ai_match_reason"] = ""
+    candidate["ai_match_evidence"] = []
+    candidate["ai_match_model"] = ""
+    candidate["ai_match_at"] = None
+    candidate["ai_match_score"] = None
+    candidate["ai_match_confidence"] = None
+    if use_local_ai and template:
+        try:
+            result = match_candidate(candidate, template)
+            candidate["ai_match_score"] = result["match_score"]
+            candidate["ai_match_confidence"] = result["confidence"]
+            candidate["ai_match_status"] = "已完成"
+            candidate["ai_match_reason"] = result.get("summary", "")
+            candidate["ai_match_evidence"] = result.get("evidence", [])
+            candidate["ai_match_model"] = result.get("model", "")
+            candidate["ai_match_at"] = result.get("matched_at")
+            candidate["match_score"] = combine_scores(
+                rule_score, result["match_score"], result["confidence"]
+            )
+        except OllamaUnavailable as exc:
+            candidate["ai_match_status"] = "不可用，已回退规则"
+            candidate["ai_match_reason"] = str(exc)
+        except (ValueError, TypeError) as exc:
+            candidate["ai_match_status"] = "返回无效，已回退规则"
+            candidate["ai_match_reason"] = str(exc)
+    elif use_local_ai:
+        candidate["ai_match_status"] = "无可用模板，已回退规则"
+    return candidate
 
 
 class JobManager:
@@ -128,8 +289,18 @@ class JobManager:
     def stop(self) -> None:
         self._scheduler_stop.set()
 
-    def submit(self, kind: str, config: Dict[str, Any]) -> int:
-        normalized = normalize_config(config)
+    def submit(
+        self,
+        kind: str,
+        config: Dict[str, Any],
+        *,
+        allow_role_snapshots: bool = False,
+    ) -> int:
+        normalized = normalize_config(
+            config,
+            strict_roles=True,
+            allow_role_snapshots=allow_role_snapshots,
+        )
         if normalized["mode"] == "url" and not normalized["url"]:
             raise ValueError("请输入公开主页或项目链接")
         job_id = db.create_job(kind, normalized)
@@ -215,6 +386,14 @@ class JobManager:
         candidate = analyze_public_url(
             config["url"], config["roles"][0], config["cities"][0]
         )
+        candidate["_requested_role"] = config["roles"][0]
+        _prepare_candidate(
+            candidate,
+            config["roles"][0],
+            config["cities"][0],
+            config.get("use_local_ai", False),
+            _template_for_role(config["roles"][0], config),
+        )
         if db.job_cancel_requested(job_id):
             self._finish_cancelled(job_id)
             return
@@ -230,12 +409,6 @@ class JobManager:
         )
 
     def _run_search_job(self, job_id: int, config: Dict[str, Any]) -> None:
-        combinations = [
-            (source, role, city)
-            for role in config["roles"]
-            for city in config["cities"]
-            for source in config["sources"]
-        ]
         prefer_contactable = config["prefer_contactable"]
         discovery_multiplier = (
             1.5
@@ -247,30 +420,43 @@ class JobManager:
             if prefer_contactable
             else config["target"]
         )
-        per_combination = max(
-            1,
-            min(15, int(math.ceil(discovery_target / len(combinations)))),
-        )
         custom_keywords = [
             item.strip() for item in config["keywords"].replace("，", ",").split(",") if item.strip()
         ][:3]
+        combinations: List[Tuple[str, str, str, str]] = []
+        for role in config["roles"]:
+            template = _template_for_role(role, config)
+            role_keywords = custom_keywords or [
+                str(item).strip()
+                for item in (template or {}).get("search_keywords", [])
+                if str(item).strip()
+            ][:5]
+            if not role_keywords:
+                role_keywords = [keyword_for_role(role, template)]
+            for city in config["cities"]:
+                for source in config["sources"]:
+                    for keyword in role_keywords:
+                        combinations.append((source, role, city, keyword))
+        per_combination = max(
+            1,
+            min(15, int(math.ceil(discovery_target / max(1, len(combinations))))),
+        )
         candidate_pool: Dict[Tuple[str, str], Dict[str, Any]] = {}
         source_errors: List[str] = []
         network_errors: List[str] = []
         rate_limit_errors: List[str] = []
 
-        for index, (source, role, city) in enumerate(combinations):
+        for index, (source, role, city, keyword) in enumerate(combinations):
             if db.job_cancel_requested(job_id):
                 result_count, _ = self._save_candidate_pool(job_id, candidate_pool, config)
                 self._finish_cancelled(job_id, result_count)
                 return
-            keyword = custom_keywords[index % len(custom_keywords)] if custom_keywords else keyword_for_role(role)
             progress = 5 + int((index / max(1, len(combinations))) * 70)
             db.update_job(
                 job_id,
                 progress=progress,
-                message="正在采集 {} · {} · {}".format(
-                    SOURCE_LABELS.get(source, source), city, role
+                message="正在采集 {} · {} · {} · {}".format(
+                    SOURCE_LABELS.get(source, source), city, role, keyword
                 ),
             )
             try:
@@ -292,6 +478,7 @@ class JobManager:
                 continue
 
             for candidate in candidates:
+                candidate["_requested_role"] = role
                 key = (candidate["source"], str(candidate["external_id"]))
                 candidate["contact_level"] = derive_contact_level(candidate)
                 existing = candidate_pool.get(key)
@@ -346,6 +533,20 @@ class JobManager:
         pool_candidates = list(candidate_pool.values())
         suppress_shared_public_emails(pool_candidates)
         db.merge_existing_verified_contacts(pool_candidates)
+        for candidate in pool_candidates:
+            role = str(
+                candidate.get("_requested_role")
+                or candidate.get("suggested_role")
+                or config["roles"][0]
+            )
+            city = str(candidate.get("city") or config["cities"][0])
+            _prepare_candidate(
+                candidate,
+                role,
+                city,
+                config.get("use_local_ai", False),
+                _template_for_role(role, config),
+            )
         selected = rank_candidates(
             pool_candidates, config["prefer_contactable"]
         )[: config["target"]]
@@ -369,6 +570,27 @@ class JobManager:
             completed_at=db.now_iso(),
         )
 
+    def _submit_due_schedule(self, config: Dict[str, Any]) -> int:
+        try:
+            return self.submit(
+                "每周自动", config, allow_role_snapshots=True
+            )
+        except Exception as exc:
+            job_id = db.create_job("每周自动", config)
+            db.update_job(
+                job_id,
+                status="执行失败",
+                progress=100,
+                error=(
+                    str(exc)
+                    if isinstance(exc, ValueError)
+                    else "定时任务创建失败"
+                ),
+                message="定时任务配置无效，请检查岗位模板",
+                completed_at=db.now_iso(),
+            )
+            return job_id
+
     def _scheduler_loop(self) -> None:
         while not self._scheduler_stop.wait(20):
             try:
@@ -380,7 +602,7 @@ class JobManager:
                 ).isoformat(timespec="seconds")
                 config = db.claim_due_schedule(next_run)
                 if config:
-                    self.submit("每周自动", config)
+                    self._submit_due_schedule(config)
             except Exception:
                 # Scheduler failures are retried on the next tick and never stop the web server.
                 continue

@@ -256,7 +256,13 @@ def github_user(username: str, requested_role: str, requested_city: str) -> Dict
     }
     enrich_public_email(candidate)
     score, role, ranked = score_candidate(candidate, evidence, requested_role, requested_city)
-    candidate.update({"match_score": score, "suggested_role": role, "evidence": ranked})
+    candidate.update({
+        "match_score": score,
+        "rule_match_score": score,
+        "suggested_role": role,
+        "evidence": evidence,
+        "_legacy_ranked_evidence": ranked,
+    })
     return candidate
 
 
@@ -332,7 +338,13 @@ def gitee_candidate_from_repo(
     score, role, ranked = score_candidate(candidate, evidence, requested_role, requested_city)
     if requested_city in ("北京", "重庆") and city == "待核验":
         score = max(0, score - 12)
-    candidate.update({"match_score": score, "suggested_role": role, "evidence": ranked})
+    candidate.update({
+        "match_score": score,
+        "rule_match_score": score,
+        "suggested_role": role,
+        "evidence": evidence,
+        "_legacy_ranked_evidence": ranked,
+    })
     return candidate
 
 
@@ -441,7 +453,13 @@ def gitlab_candidate(
     }
     enrich_public_email(candidate)
     score, role, ranked = score_candidate(candidate, evidence, requested_role, requested_city)
-    candidate.update({"match_score": score, "suggested_role": role, "evidence": ranked})
+    candidate.update({
+        "match_score": score,
+        "rule_match_score": score,
+        "suggested_role": role,
+        "evidence": evidence,
+        "_legacy_ranked_evidence": ranked,
+    })
     return candidate
 
 
@@ -533,7 +551,13 @@ def huggingface_candidate(
         "source_updated_at": last_modified,
     }
     score, role, ranked = score_candidate(candidate, evidence, requested_role, requested_city)
-    candidate.update({"match_score": score, "suggested_role": role, "evidence": ranked})
+    candidate.update({
+        "match_score": score,
+        "rule_match_score": score,
+        "suggested_role": role,
+        "evidence": evidence,
+        "_legacy_ranked_evidence": ranked,
+    })
     return candidate
 
 
@@ -617,7 +641,13 @@ def stackoverflow_candidate(
         "source_updated_at": _timestamp_iso(profile.get("last_access_date")),
     }
     score, role, ranked = score_candidate(candidate, evidence, requested_role, requested_city)
-    candidate.update({"match_score": score, "suggested_role": role, "evidence": ranked})
+    candidate.update({
+        "match_score": score,
+        "rule_match_score": score,
+        "suggested_role": role,
+        "evidence": evidence,
+        "_legacy_ranked_evidence": ranked,
+    })
     return candidate
 
 
@@ -696,7 +726,7 @@ def analyze_public_url(url: str, role: str = "全部", city: str = "全部") -> 
         }
         enrich_public_email(candidate)
         score, suggested_role, ranked = score_candidate(candidate, [], role, city)
-        candidate.update({"match_score": score, "suggested_role": suggested_role, "evidence": ranked})
+        candidate.update({"match_score": score, "rule_match_score": score, "suggested_role": suggested_role, "evidence": ranked})
         return candidate
     if host in ("gitlab.com", "www.gitlab.com") and parts:
         username = parts[0]

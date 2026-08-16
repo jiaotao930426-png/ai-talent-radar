@@ -2,6 +2,8 @@ const state = {
   view: "overview",
   manualMode: "search",
   selectedCandidate: null,
+  roleTemplates: [],
+  scheduleRoles: null,
   candidatePagination: { offset: 0, limit: 50, total: 0 },
   archivedPagination: { offset: 0, limit: 50, total: 0 },
 };
@@ -10,6 +12,7 @@ const viewMeta = {
   overview: ["总览", "人才采集与审核状态"],
   manual: ["手动采集", "按条件搜索或分析公开链接"],
   schedule: ["每周任务", "配置自动采集计划"],
+  roles: ["岗位模板", "管理岗位匹配规则"],
   candidates: ["人才池", "筛选、核验和审核候选人"],
   jobs: ["任务日志", "查看采集进度与失败原因"],
   data: ["数据管理", "归档、备份和清理本地数据"],
@@ -44,6 +47,12 @@ const contactLevelMeta = {
   C: { label: "其他公开入口待核验", tone: "neutral" },
   D: { label: "仅公开主页", tone: "neutral" },
 };
+
+const fallbackRoleTemplates = [
+  { id: "builtin-agent", slug: "ai-agent", name: "AI Agent 工程师", is_active: true, is_builtin: true, version: 1 },
+  { id: "builtin-coding", slug: "ai-coding", name: "AI Coding 工程师", is_active: true, is_builtin: true, version: 1 },
+  { id: "builtin-product", slug: "ai-product", name: "AI 产品经理", is_active: true, is_builtin: true, version: 1 },
+];
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -142,6 +151,234 @@ function safeExternalUrl(value) {
   }
 }
 
+function templateIsActive(template) {
+  return template.is_active !== false && template.active !== false;
+}
+
+function templateValue(template) {
+  return String(template.name || template.slug || template.id || "").trim();
+}
+
+function templateId(template) {
+  return String(template.id ?? template.slug ?? template.name ?? "");
+}
+
+function templateTerms(template, key) {
+  const value = template[key];
+  if (Array.isArray(value)) return value.filter(Boolean).map(String);
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.filter(Boolean).map(String);
+    } catch (_error) {
+      // Older API responses may expose comma-separated values.
+    }
+    return value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function templateConfigValue(config, key, fallback = false) {
+  if (!config || typeof config !== "object") return fallback;
+  if (config[key] !== undefined) return config[key];
+  if (key === "enable_ai") return config.use_local_ai ?? config.ai_enabled ?? fallback;
+  return fallback;
+}
+
+function renderRoleControls() {
+  const activeTemplates = state.roleTemplates.filter(templateIsActive);
+  const manualSelect = $("#manualRole");
+  if (manualSelect) {
+    const previous = manualSelect.value;
+    manualSelect.replaceChildren();
+    activeTemplates.forEach((template) => {
+      const option = document.createElement("option");
+      option.value = templateValue(template);
+      option.textContent = templateValue(template);
+      if (template.description) option.title = template.description;
+      manualSelect.append(option);
+    });
+    if (previous && activeTemplates.some((template) => templateValue(template) === previous)) {
+      manualSelect.value = previous;
+    }
+    manualSelect.disabled = !activeTemplates.length;
+  }
+
+  const roleList = $("#scheduleRoleList");
+  if (roleList) {
+    const selected = state.scheduleRoles || selectedValues(".schedule-role");
+    roleList.replaceChildren();
+    activeTemplates.forEach((template) => {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.className = "schedule-role";
+      input.type = "checkbox";
+      input.value = templateValue(template);
+      input.checked = selected.length ? selected.includes(input.value) : true;
+      const text = document.createElement("span");
+      text.textContent = templateValue(template);
+      label.append(input, text);
+      roleList.append(label);
+    });
+    if (!activeTemplates.length) {
+      const empty = document.createElement("span");
+      empty.className = "field-help";
+      empty.textContent = "暂无启用的岗位模板，请先在岗位模板中启用。";
+      roleList.append(empty);
+    }
+  }
+}
+
+function roleTemplatePayloadFromForm() {
+  const list = (id) => $(id).value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+  const payload = {
+    name: $("#roleTemplateName").value.trim(),
+    description: $("#roleTemplateDescription").value.trim(),
+    search_keywords: list("#roleTemplateSearchKeywords"),
+    synonyms: list("#roleTemplateSynonyms"),
+    required_terms: list("#roleTemplateRequiredTerms"),
+    preferred_terms: list("#roleTemplatePreferredTerms"),
+    evidence_terms: list("#roleTemplateEvidenceTerms"),
+    exclude_terms: list("#roleTemplateExcludeTerms"),
+  };
+  const slug = $("#roleTemplateSlug").value.trim().toLowerCase();
+  if (slug) payload.slug = slug;
+  else if (!$("#roleTemplateId").value.trim()) {
+    const generated = payload.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    payload.slug = `${generated || "custom-role"}-${Date.now().toString(36)}`.slice(0, 64);
+  }
+  return payload;
+}
+
+function setRoleTemplateForm(template = null) {
+  $("#roleTemplateId").value = template ? templateId(template) : "";
+  $("#roleTemplateName").value = template ? templateValue(template) : "";
+  $("#roleTemplateSlug").value = template?.slug || "";
+  $("#roleTemplateDescription").value = template?.description || "";
+  const fieldMap = {
+    search_keywords: "#roleTemplateSearchKeywords",
+    synonyms: "#roleTemplateSynonyms",
+    required_terms: "#roleTemplateRequiredTerms",
+    preferred_terms: "#roleTemplatePreferredTerms",
+    evidence_terms: "#roleTemplateEvidenceTerms",
+    exclude_terms: "#roleTemplateExcludeTerms",
+  };
+  Object.entries(fieldMap).forEach(([key, selector]) => {
+    $(selector).value = templateTerms(template || {}, key).join(", ");
+  });
+  const editing = Boolean(template);
+  $("#roleTemplateFormTitle").textContent = editing ? "编辑岗位模板" : "新增岗位模板";
+  $("#roleTemplateSubmit").textContent = editing ? "保存模板" : "创建模板";
+  $("#roleTemplateCancelButton").classList.toggle("hidden", !editing);
+}
+
+function renderRoleTemplates() {
+  const container = $("#roleTemplateList");
+  if (!container) return;
+  container.replaceChildren();
+  if (!state.roleTemplates.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "暂无岗位模板";
+    container.append(empty);
+    return;
+  }
+  state.roleTemplates.forEach((template) => {
+    const card = document.createElement("article");
+    card.className = "role-template-card";
+    const header = document.createElement("header");
+    const title = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = templateValue(template);
+    title.append(name);
+    const status = document.createElement("span");
+    status.className = `badge ${templateIsActive(template) ? "success" : "neutral"}`;
+    status.textContent = templateIsActive(template) ? "启用" : "已停用";
+    header.append(title, status);
+    const meta = document.createElement("p");
+    meta.className = "role-template-meta";
+    const type = template.is_builtin ? "内置模板" : "自定义模板";
+    meta.textContent = `${type} · v${template.version || 1}${template.description ? ` · ${template.description}` : ""}`;
+    const terms = document.createElement("p");
+    terms.className = "role-template-terms";
+    const required = templateTerms(template, "required_terms");
+    const preferred = templateTerms(template, "preferred_terms");
+    terms.textContent = required.length || preferred.length
+      ? `必须：${required.slice(0, 5).join("、") || "—"}　优选：${preferred.slice(0, 5).join("、") || "—"}`
+      : "尚未配置技能词";
+    const actions = document.createElement("div");
+    actions.className = "role-template-actions";
+    const edit = document.createElement("button");
+    edit.className = "button secondary";
+    edit.type = "button";
+    edit.textContent = "编辑";
+    edit.addEventListener("click", () => {
+      setRoleTemplateForm(template);
+      $("#roleTemplateName").focus();
+    });
+    const toggle = document.createElement("button");
+    toggle.className = templateIsActive(template) ? "button secondary" : "button primary";
+    toggle.type = "button";
+    toggle.textContent = templateIsActive(template) ? "停用" : "启用";
+    toggle.addEventListener("click", () => toggleRoleTemplate(template));
+    actions.append(edit, toggle);
+    card.append(header, meta, terms, actions);
+    container.append(card);
+  });
+}
+
+async function loadRoleTemplates(showError = false) {
+  try {
+    const payload = await api("/api/role-templates");
+    const items = Array.isArray(payload) ? payload : payload.items || payload.templates || [];
+    state.roleTemplates = Array.isArray(items) && items.length ? items : fallbackRoleTemplates;
+  } catch (error) {
+    state.roleTemplates = fallbackRoleTemplates;
+    if (showError) showToast(`岗位模板读取失败：${error.message}`, true);
+  }
+  renderRoleControls();
+  renderRoleTemplates();
+}
+
+async function saveRoleTemplate(event) {
+  event.preventDefault();
+  const payload = roleTemplatePayloadFromForm();
+  if (!payload.name) {
+    showToast("请输入岗位名称", true);
+    return;
+  }
+  const id = $("#roleTemplateId").value.trim();
+  const button = $("#roleTemplateSubmit");
+  button.disabled = true;
+  try {
+    await api(id ? `/api/role-templates/${encodeURIComponent(id)}` : "/api/role-templates", {
+      method: id ? "PATCH" : "POST",
+      body: JSON.stringify(payload),
+    });
+    showToast(id ? "岗位模板已保存" : "岗位模板已创建");
+    setRoleTemplateForm();
+    await loadRoleTemplates(true);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function toggleRoleTemplate(template) {
+  const action = templateIsActive(template) ? "deactivate" : "activate";
+  try {
+    await api(`/api/role-templates/${encodeURIComponent(templateId(template))}/${action}`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    showToast(templateIsActive(template) ? "岗位模板已停用" : "岗位模板已启用");
+    await loadRoleTemplates(true);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
 async function copyText(value) {
   const text = String(value || "").trim();
   if (!text) return;
@@ -181,6 +418,7 @@ function setView(view) {
   $("#pageSubtitle").textContent = viewMeta[view][1];
   if (view === "overview") loadOverview();
   if (view === "schedule") loadSchedule();
+  if (view === "roles") loadRoleTemplates(true);
   if (view === "candidates") loadCandidates();
   if (view === "jobs") loadJobs();
   if (view === "data") loadDataManagement();
@@ -385,6 +623,8 @@ async function submitManual(event) {
     keywords: $("#manualKeywords").value.trim(),
     url: $("#manualUrl").value.trim(),
     prefer_contactable: $("#manualPreferContactable").checked,
+    enable_ai: $("#manualEnableAI").checked,
+    use_local_ai: $("#manualEnableAI").checked,
   };
   button.disabled = true; button.textContent = "创建任务…";
   try {
@@ -398,13 +638,19 @@ async function submitManual(event) {
 async function loadSchedule() {
   try {
     const schedule = await api("/api/schedule");
+    state.scheduleRoles = schedule.config.roles || [];
+    renderRoleControls();
     $("#scheduleEnabled").checked = schedule.enabled;
     $("#scheduleWeekday").value = String(schedule.weekday);
     $("#scheduleTime").value = `${String(schedule.hour).padStart(2, "0")}:${String(schedule.minute).padStart(2, "0")}`;
     $("#scheduleTarget").value = schedule.config.target || 30;
     $("#scheduleKeywords").value = schedule.config.keywords || "";
     $("#schedulePreferContactable").checked = schedule.config.prefer_contactable !== false;
-    $$(".schedule-role").forEach((input) => { input.checked = (schedule.config.roles || []).includes(input.value); });
+    $("#scheduleEnableAI").checked = Boolean(templateConfigValue(schedule.config, "enable_ai", false));
+    const scheduleRoles = state.scheduleRoles;
+    if (scheduleRoles.length) {
+      $$(".schedule-role").forEach((input) => { input.checked = scheduleRoles.includes(input.value); });
+    }
     $$(".schedule-city").forEach((input) => { input.checked = (schedule.config.cities || []).includes(input.value); });
     $$(".schedule-source").forEach((input) => { input.checked = (schedule.config.sources || []).includes(input.value); });
   $("#scheduleNextRun").textContent = schedule.enabled ? formatTime(schedule.retry_at || schedule.next_run_at) : "未启用";
@@ -432,8 +678,11 @@ async function saveSchedule(event) {
       target: Number($("#scheduleTarget").value),
       keywords: $("#scheduleKeywords").value.trim(),
       prefer_contactable: $("#schedulePreferContactable").checked,
+      enable_ai: $("#scheduleEnableAI").checked,
+      use_local_ai: $("#scheduleEnableAI").checked,
     },
   };
+  state.scheduleRoles = roles;
   try {
     const schedule = await api("/api/schedule", { method: "PUT", body: JSON.stringify(payload) });
     $("#scheduleNextRun").textContent = schedule.enabled ? formatTime(schedule.retry_at || schedule.next_run_at) : "未启用";
@@ -618,7 +867,14 @@ function renderCandidates(items) {
     name.append(strong, user); row.append(name);
     const city = document.createElement("td"); city.textContent = candidate.city; row.append(city);
     const role = document.createElement("td"); role.textContent = candidate.suggested_role; row.append(role);
-    const score = document.createElement("td"); score.className = "score"; score.textContent = candidate.match_score; row.append(score);
+    const score = document.createElement("td"); score.className = "score";
+    const totalScore = document.createElement("strong"); totalScore.textContent = candidate.match_score ?? "—";
+    score.append(totalScore);
+    const scoreMeta = document.createElement("small"); scoreMeta.className = "score-meta";
+    const ruleText = candidate.rule_match_score == null ? "规则 —" : `规则 ${candidate.rule_match_score}`;
+    const aiText = candidate.ai_match_score == null ? "AI 未启用" : `AI ${candidate.ai_match_score}`;
+    scoreMeta.textContent = `${ruleText} · ${aiText}`;
+    score.append(scoreMeta); row.append(score);
     const collection = document.createElement("td"); collection.className = "collection-time";
     const latest = document.createElement("strong"); latest.textContent = formatTime(candidate.last_seen_at);
     const first = document.createElement("small"); first.textContent = `首次 ${formatTime(candidate.first_seen_at)}`;
@@ -662,6 +918,61 @@ function addDetailNode(container, label, node) {
   wrapper.append(dt, dd); container.append(wrapper);
 }
 
+function renderAiAnalysis(candidate) {
+  const container = $("#dialogAiAnalysis");
+  container.replaceChildren();
+  const status = String(candidate.ai_match_status || "未启用");
+  const summary = document.createElement("p");
+  summary.textContent = status === "未启用"
+    ? "本次任务未启用本地 AI，当前为规则匹配结果。"
+    : `状态：${status}${candidate.ai_match_model ? ` · 模型 ${candidate.ai_match_model}` : ""}`;
+  container.append(summary);
+  const grid = document.createElement("div");
+  grid.className = "ai-analysis-grid";
+  const add = (label, value) => {
+    const item = document.createElement("div");
+    const key = document.createElement("span"); key.textContent = label;
+    const content = document.createElement("strong"); content.textContent = value || "—";
+    item.append(key, content); grid.append(item);
+  };
+  add("综合评分", candidate.match_score == null ? "—" : `${candidate.match_score}/100`);
+  add("规则评分", candidate.rule_match_score == null ? "—" : `${candidate.rule_match_score}/100`);
+  add("AI 评分", candidate.ai_match_score == null ? "—" : `${candidate.ai_match_score}/100`);
+  add("AI 置信度", candidate.ai_match_confidence == null ? "—" : `${Math.round(Number(candidate.ai_match_confidence) * 100)}%`);
+  container.append(grid);
+  if (candidate.ai_match_reason) {
+    const reason = document.createElement("p");
+    reason.textContent = `判断摘要：${candidate.ai_match_reason}`;
+    container.append(reason);
+  }
+  const breakdown = candidate.match_breakdown;
+  if (breakdown && typeof breakdown === "object") {
+    const matched = [
+      ...(Array.isArray(breakdown.synonyms) ? breakdown.synonyms : []),
+      ...(Array.isArray(breakdown.required_terms) ? breakdown.required_terms : []),
+      ...(Array.isArray(breakdown.preferred_terms) ? breakdown.preferred_terms : []),
+      ...(Array.isArray(breakdown.evidence_terms) ? breakdown.evidence_terms : []),
+    ].filter(Boolean);
+    const missing = Array.isArray(breakdown.missing_required_terms) ? breakdown.missing_required_terms : [];
+    if (matched.length || missing.length) {
+      const rule = document.createElement("p");
+      rule.textContent = `规则命中：${matched.join("、") || "—"}${missing.length ? `；缺少必须项：${missing.join("、")}` : ""}`;
+      container.append(rule);
+    }
+  }
+  const evidence = Array.isArray(candidate.ai_match_evidence) ? candidate.ai_match_evidence : [];
+  if (evidence.length) {
+    const list = document.createElement("ul");
+    evidence.slice(0, 6).forEach((item) => {
+      const li = document.createElement("li");
+      if (typeof item === "string") li.textContent = item;
+      else li.textContent = item?.title || item?.url || item?.reason || JSON.stringify(item);
+      list.append(li);
+    });
+    container.append(list);
+  }
+}
+
 async function openCandidate(candidateId) {
   try {
     const candidate = await api(`/api/candidates/${candidateId}`);
@@ -688,6 +999,9 @@ async function openCandidate(candidateId) {
     const details = $("#dialogDetails"); details.replaceChildren();
     addDetail(details, "建议岗位", candidate.suggested_role);
     addDetail(details, "匹配评分", `${candidate.match_score}/100`);
+    addDetail(details, "规则评分", candidate.rule_match_score == null ? "—" : `${candidate.rule_match_score}/100`);
+    addDetail(details, "AI 评分", candidate.ai_match_score == null ? "—" : `${candidate.ai_match_score}/100`);
+    addDetail(details, "AI 分析状态", candidate.ai_match_status || "未启用");
     addDetail(details, "最近采集时间", formatTime(candidate.last_seen_at));
     addDetail(details, "首次采集时间", formatTime(candidate.first_seen_at));
     addDetail(details, "来源更新时间", formatTime(candidate.source_updated_at));
@@ -702,6 +1016,7 @@ async function openCandidate(candidateId) {
     addDetail(details, "邮箱核验时间", formatTime(candidate.contact_email_verified_at));
     addDetail(details, "联系进度更新时间", formatTime(candidate.contact_updated_at));
     addDetail(details, "公开简介", candidate.bio);
+    renderAiAnalysis(candidate);
     const evidence = $("#dialogEvidence"); evidence.replaceChildren();
     if (!candidate.evidence.length) {
       const empty = document.createElement("p"); empty.className = "empty"; empty.textContent = "暂无公开项目证据"; evidence.append(empty);
@@ -761,6 +1076,12 @@ function bindEvents() {
   }));
   $("#manualForm").addEventListener("submit", submitManual);
   $("#scheduleForm").addEventListener("submit", saveSchedule);
+  $("#scheduleRoleList").addEventListener("change", () => {
+    state.scheduleRoles = selectedValues(".schedule-role");
+  });
+  $("#roleTemplateForm").addEventListener("submit", saveRoleTemplate);
+  $("#roleTemplateRefreshButton").addEventListener("click", () => loadRoleTemplates(true));
+  $("#roleTemplateCancelButton").addEventListener("click", () => setRoleTemplateForm());
   $("#candidateFilterButton").addEventListener("click", () => loadCandidates(true));
   $("#candidateSearch").addEventListener("keydown", (event) => { if (event.key === "Enter") loadCandidates(true); });
   $("#candidatePrevPage").addEventListener("click", () => {
@@ -797,6 +1118,7 @@ if (window.location.protocol === "file:") {
 } else {
   bindEvents();
   loadHealth();
+  loadRoleTemplates();
   loadOverview();
   window.setInterval(() => {
     if (state.view === "jobs") loadJobs();

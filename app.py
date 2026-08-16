@@ -80,6 +80,12 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json(job or {"error": "任务不存在"}, HTTPStatus.OK if job else HTTPStatus.NOT_FOUND)
         elif path == "/api/schedule":
             self.send_json(db.get_schedule())
+        elif path == "/api/role-templates":
+            self.send_json({"items": db.list_role_templates()})
+        elif re.fullmatch(r"/api/role-templates/[^/]+", path):
+            identifier = path.rsplit("/", 1)[1]
+            template = db.get_role_template(identifier)
+            self.send_json(template or {"error": "岗位模板不存在"}, HTTPStatus.OK if template else HTTPStatus.NOT_FOUND)
         elif path == "/api/data-management":
             self.send_json(db.data_management_stats())
         elif path == "/report.html":
@@ -110,6 +116,16 @@ class AppHandler(BaseHTTPRequestHandler):
             if path == "/api/jobs":
                 job_id = manager.submit("手动采集", payload)
                 self.send_json({"job_id": job_id}, HTTPStatus.ACCEPTED)
+            elif path == "/api/role-templates":
+                self.send_json(db.create_role_template(payload), HTTPStatus.CREATED)
+            elif re.fullmatch(r"/api/role-templates/[^/]+/(activate|deactivate)", path):
+                parts = path.split("/")
+                active = parts[-1] == "activate"
+                template = db.set_role_template_active(parts[-2], active)
+                if not template:
+                    self.send_json({"error": "岗位模板不存在"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self.send_json(template)
             elif re.fullmatch(r"/api/jobs/\d+/cancel", path):
                 job_id = int(path.split("/")[3])
                 changed = db.request_job_cancel(job_id)
@@ -207,6 +223,13 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"updated": True})
                 else:
                     self.send_json({"error": "候选人不存在"}, HTTPStatus.NOT_FOUND)
+            elif re.fullmatch(r"/api/role-templates/[^/]+", path):
+                identifier = path.rsplit("/", 1)[1]
+                template = db.update_role_template(identifier, payload)
+                if template:
+                    self.send_json(template)
+                else:
+                    self.send_json({"error": "岗位模板不存在"}, HTTPStatus.NOT_FOUND)
             else:
                 self.send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
         except ValueError as exc:
@@ -240,7 +263,14 @@ class AppHandler(BaseHTTPRequestHandler):
                     "sources": raw_config.get("sources"),
                     "keywords": raw_config.get("keywords"),
                     "prefer_contactable": raw_config.get("prefer_contactable", True),
-                }
+                    "use_local_ai": raw_config.get(
+                        "use_local_ai", raw_config.get("enable_ai", False)
+                    ),
+                },
+                # Keep the historical schedule payload compatibility: an old
+                # saved config with a retired role falls back to the first
+                # active template. New manual jobs reject unknown roles.
+                strict_roles=False,
             )
             enabled = payload["enabled"]
             schedule = {
@@ -255,6 +285,9 @@ class AppHandler(BaseHTTPRequestHandler):
                     "target": normalized_config["target"],
                     "keywords": normalized_config["keywords"],
                     "prefer_contactable": normalized_config["prefer_contactable"],
+                    "use_local_ai": normalized_config["use_local_ai"],
+                    "enable_ai": normalized_config["use_local_ai"],
+                    "role_template_snapshots": normalized_config.get("role_template_snapshots", []),
                 },
             }
             next_run = (

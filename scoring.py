@@ -1,5 +1,5 @@
 import re
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 ROLE_TERMS = {
@@ -103,11 +103,45 @@ def evidence_relevance(evidence: Dict[str, Any]) -> int:
     return score
 
 
+def template_evidence_relevance(
+    evidence: Dict[str, Any], template: Dict[str, Any]
+) -> int:
+    """Rank public evidence by the selected template instead of legacy roles."""
+    text = normalized_text(evidence.get("title"), evidence.get("description"))
+    score = 0
+    term_weights = {
+        "required_terms": 14,
+        "preferred_terms": 10,
+        "evidence_terms": 9,
+        "synonyms": 7,
+    }
+    for key, weight in term_weights.items():
+        score += sum(
+            weight for term in template.get(key, []) if str(term).lower() in text
+        )
+    score -= sum(
+        12
+        for term in template.get("exclude_terms", [])
+        if str(term).lower() in text
+    )
+    if not evidence.get("is_fork"):
+        score += 6
+    stars = int(evidence.get("stars") or 0)
+    if stars >= 100:
+        score += 7
+    elif stars >= 10:
+        score += 4
+    elif stars >= 1:
+        score += 2
+    return score
+
+
 def score_candidate(
     profile: Dict[str, Any],
     evidence: List[Dict[str, Any]],
     requested_role: str = "全部",
     requested_city: str = "全部",
+    role_template: Optional[Dict[str, Any]] = None,
 ) -> Tuple[int, str, List[Dict[str, Any]]]:
     profile_text = normalized_text(
         profile.get("bio"),
@@ -115,6 +149,15 @@ def score_candidate(
         profile.get("display_name"),
         profile.get("username"),
     )
+    if role_template:
+        return _score_with_template(
+            profile,
+            evidence,
+            profile_text,
+            requested_role,
+            requested_city,
+            role_template,
+        )
     ranked = sorted(evidence, key=evidence_relevance, reverse=True)
     evidence_text = normalized_text(
         *[
@@ -151,7 +194,104 @@ def score_candidate(
     return min(score, 100), suggested_role, ranked[:6]
 
 
-def keyword_for_role(role: str) -> str:
+def _score_with_template(
+    profile: Dict[str, Any],
+    evidence: List[Dict[str, Any]],
+    profile_text: str,
+    requested_role: str,
+    requested_city: str,
+    template: Dict[str, Any],
+) -> Tuple[int, str, List[Dict[str, Any]]]:
+    """Score a candidate against a user-owned template without changing legacy rules."""
+    ranked = sorted(
+        evidence,
+        key=lambda item: template_evidence_relevance(item, template),
+        reverse=True,
+    )
+    evidence_text = normalized_text(
+        *[
+            "{} {}".format(item.get("title") or "", item.get("description") or "")
+            for item in ranked[:12]
+        ]
+    )
+    combined = "{} {}".format(profile_text, evidence_text)
+
+    def hits(key: str) -> int:
+        return sum(1 for term in template.get(key, []) if str(term).lower() in combined)
+
+    required = hits("required_terms")
+    preferred = hits("preferred_terms")
+    synonym_hits = hits("synonyms")
+    evidence_hits = hits("evidence_terms")
+    excluded = hits("exclude_terms")
+    weights = template.get("weights") or {}
+    required_terms = template.get("required_terms") or []
+    # A missing required term is a meaningful mismatch, but an empty required list
+    # keeps templates useful for exploratory searches.
+    required_score = min(required * int(weights.get("required", 10)), 35)
+    preferred_score = min(
+        (preferred + synonym_hits) * int(weights.get("preferred", 8)), 24
+    )
+    evidence_score = min(evidence_hits * int(weights.get("evidence", 7)), 20)
+    exclude_penalty = min(excluded * int(weights.get("exclude", 15)), 40)
+    score = 20 + required_score + preferred_score + evidence_score
+    if required_terms and required == 0:
+        score -= 18
+    score -= exclude_penalty
+    template_terms = [
+        str(term).lower()
+        for key in ("required_terms", "preferred_terms", "evidence_terms")
+        for term in template.get(key, [])
+    ]
+    relevant_original = [
+        item
+        for item in evidence
+        if not item.get("is_fork")
+        and any(
+            term in normalized_text(item.get("title"), item.get("description"))
+            for term in template_terms
+        )
+    ]
+    score += min(len(relevant_original) * 5, 20)
+    city = profile.get("city") or "待核验"
+    if requested_city in ("北京", "重庆"):
+        score += 10 if city == requested_city else 0
+    elif city in ("北京", "重庆"):
+        score += 8
+    if profile.get("source_updated_at"):
+        score += 2
+    return (
+        max(0, min(score, 100)),
+        requested_role or template.get("name", "自定义岗位"),
+        ranked[:6],
+    )
+
+
+def template_match_breakdown(
+    profile: Dict[str, Any], evidence: List[Dict[str, Any]], template: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Return explainable rule hits for the UI and optional AI prompt."""
+    text = normalized_text(
+        profile.get("bio"),
+        profile.get("company"),
+        profile.get("display_name"),
+        profile.get("username"),
+        *["{} {}".format(item.get("title") or "", item.get("description") or "") for item in evidence],
+    )
+    result: Dict[str, Any] = {}
+    for key in ("synonyms", "required_terms", "preferred_terms", "evidence_terms", "exclude_terms"):
+        result[key] = [term for term in template.get(key, []) if str(term).lower() in text]
+    result["missing_required_terms"] = [
+        term for term in template.get("required_terms", []) if str(term).lower() not in text
+    ]
+    return result
+
+
+def keyword_for_role(role: str, role_template: Optional[Dict[str, Any]] = None) -> str:
+    if role_template:
+        keywords = role_template.get("search_keywords") or []
+        if keywords:
+            return str(keywords[0])
     return {
         "AI Agent 工程师": "agent",
         "AI Coding 工程师": "coding agent",

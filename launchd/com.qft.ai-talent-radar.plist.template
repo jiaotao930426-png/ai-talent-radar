@@ -26,6 +26,14 @@
     <string>8765</string>
     <key>TALENT_RADAR_DB</key>
     <string>__PROJECT_DIR__/data/talent_radar.db</string>
+    <key>OLLAMA_BASE_URL</key>
+    <string>http://127.0.0.1:11434</string>
+    <key>OLLAMA_MODEL</key>
+    <string>qwen3:4b</string>
+    <key>OLLAMA_TIMEOUT_SECONDS</key>
+    <string>240</string>
+    <key>OLLAMA_AUTOSTART</key>
+    <string>true</string>
   </dict>
 
   <key>RunAtLoad</key>

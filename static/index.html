@@ -18,6 +18,7 @@
         <button class="nav-item active" data-view="overview">总览</button>
         <button class="nav-item" data-view="manual">手动采集</button>
         <button class="nav-item" data-view="schedule">每周任务</button>
+        <button class="nav-item" data-view="roles">岗位模板</button>
         <button class="nav-item" data-view="candidates">人才池</button>
         <button class="nav-item" data-view="jobs">任务日志</button>
         <button class="nav-item" data-view="data">数据管理</button>
@@ -36,7 +37,7 @@
         </div>
         <div class="topbar-actions">
           <button id="refreshButton" class="button secondary" type="button">刷新</button>
-          <a class="button secondary" href="/export/candidates.xlsx">导出 Excel</a>
+          <a id="candidateExportButton" class="button secondary" href="/export/candidates.xlsx">导出 Excel</a>
           <a class="button primary" href="/report.html" target="_blank" rel="noopener noreferrer">打开报告</a>
         </div>
       </header>
@@ -103,11 +104,7 @@
 
               <div id="searchFields" class="field-grid">
                 <label class="field"><span>岗位</span>
-                  <select id="manualRole">
-                    <option>AI Agent 工程师</option>
-                    <option>AI Coding 工程师</option>
-                    <option>AI 产品经理</option>
-                  </select>
+                  <select id="manualRole" aria-label="选择岗位模板"></select>
                 </label>
                 <label class="field"><span>城市</span>
                   <select id="manualCity"><option>北京</option><option>重庆</option></select>
@@ -119,8 +116,11 @@
                   <input id="manualKeywords" type="text" placeholder="留空使用岗位默认关键词，多个关键词用逗号分隔">
                 </label>
                 <div class="field field-wide preference-field">
-                  <strong>优先有公开联系方式</strong>
-                  <label class="switch"><input id="manualPreferContactable" type="checkbox" checked><span></span><b>启用</b></label>
+                  <div><strong>采集偏好</strong><small class="field-help">本地 AI 默认开启；服务不可用时会安全回退到规则匹配并显示原因。</small></div>
+                  <div class="preference-controls">
+                    <label class="switch"><input id="manualPreferContactable" type="checkbox" checked><span></span><b>优先有公开联系方式</b></label>
+                    <label class="switch"><input id="manualEnableAI" type="checkbox" checked><span></span><b>启用本地 AI 分析</b></label>
+                  </div>
                 </div>
               </div>
 
@@ -129,6 +129,12 @@
                   <input id="manualUrl" type="url" placeholder="https://github.com/username">
                   <small class="field-help">当前可直接分析 GitHub、Gitee、GitLab、Hugging Face 和 Stack Overflow 的公开链接。</small>
                 </label>
+                <div class="field field-wide preference-field">
+                  <div><strong>分析选项</strong><small class="field-help">本地 AI 默认开启；服务不可用时会安全回退到规则匹配并显示原因。</small></div>
+                  <div class="preference-controls">
+                    <label class="switch"><input id="manualUrlEnableAI" type="checkbox" checked><span></span><b>启用本地 AI 分析</b></label>
+                  </div>
+                </div>
               </div>
             </section>
 
@@ -184,19 +190,20 @@
                 <label class="field field-wide"><span>补充关键词</span><input id="scheduleKeywords" type="text" placeholder="留空使用岗位默认关键词"></label>
               </div>
               <div class="preference-field">
-                <strong>优先有公开联系方式</strong>
-                <label class="switch"><input id="schedulePreferContactable" type="checkbox" checked><span></span><b>启用</b></label>
+                <div><strong>采集偏好</strong><small class="field-help">本地 AI 不可用时，任务会继续使用规则匹配。</small></div>
+                <div class="preference-controls">
+                  <label class="switch"><input id="schedulePreferContactable" type="checkbox" checked><span></span><b>优先有公开联系方式</b></label>
+                  <label class="switch"><input id="scheduleEnableAI" type="checkbox"><span></span><b>启用本地 AI 分析</b></label>
+                </div>
               </div>
               <div class="next-run"><span>下次运行</span><strong id="scheduleNextRun">未启用</strong></div>
             </section>
 
-            <section class="panel form-panel">
-              <div class="section-heading"><h2>范围</h2></div>
-              <fieldset><legend>岗位</legend>
-                <div class="inline-checks">
-                  <label><input class="schedule-role" type="checkbox" value="AI Agent 工程师" checked>AI Agent 工程师</label>
-                  <label><input class="schedule-role" type="checkbox" value="AI Coding 工程师" checked>AI Coding 工程师</label>
-                  <label><input class="schedule-role" type="checkbox" value="AI 产品经理" checked>AI 产品经理</label>
+              <section class="panel form-panel">
+                <div class="section-heading"><h2>范围</h2></div>
+                <fieldset><legend>岗位</legend>
+                <div id="scheduleRoleList" class="inline-checks">
+                  <span class="field-help">正在读取岗位模板…</span>
                 </div>
               </fieldset>
               <fieldset><legend>城市</legend>
@@ -220,6 +227,34 @@
           </form>
         </section>
 
+        <section id="view-roles" class="view" aria-labelledby="pageTitle">
+          <div class="roles-layout">
+            <section class="panel">
+              <div class="section-heading"><h2>岗位模板</h2><button id="roleTemplateRefreshButton" class="text-button" type="button">刷新</button></div>
+              <p class="section-meta">内置模板可停用但不会删除；新模板会用于后续采集任务。</p>
+              <div id="roleTemplateList" class="role-template-list"><p class="empty">正在读取岗位模板…</p></div>
+            </section>
+            <section class="panel">
+              <div class="section-heading"><h2 id="roleTemplateFormTitle">新增岗位模板</h2><button id="roleTemplateCancelButton" class="text-button hidden" type="button">取消编辑</button></div>
+              <form id="roleTemplateForm" class="role-template-form">
+                <input id="roleTemplateId" type="hidden">
+                <label class="field"><span>岗位名称</span><input id="roleTemplateName" required maxlength="80" placeholder="例如：AI 研究工程师"></label>
+                <label class="field"><span>模板标识</span><input id="roleTemplateSlug" maxlength="64" pattern="[a-z0-9][a-z0-9-]{1,63}" placeholder="可选，例如 ai-research-engineer"><small id="roleTemplateSlugHelp" class="field-help">仅限小写字母、数字和连字符；留空时自动生成。</small></label>
+                <label class="field"><span>岗位说明</span><textarea id="roleTemplateDescription" rows="3" maxlength="500" placeholder="岗位职责与筛选重点"></textarea></label>
+                <label class="field"><span>搜索关键词</span><input id="roleTemplateSearchKeywords" placeholder="多个关键词用逗号分隔"></label>
+                <label class="field"><span>同义词</span><input id="roleTemplateSynonyms" placeholder="多个词用逗号分隔"></label>
+                <div class="template-term-grid">
+                  <label class="field"><span>必须技能</span><textarea id="roleTemplateRequiredTerms" rows="3" placeholder="多个词用逗号分隔"></textarea></label>
+                  <label class="field"><span>优选技能</span><textarea id="roleTemplatePreferredTerms" rows="3" placeholder="多个词用逗号分隔"></textarea></label>
+                  <label class="field"><span>项目证据词</span><textarea id="roleTemplateEvidenceTerms" rows="3" placeholder="多个词用逗号分隔"></textarea></label>
+                  <label class="field"><span>排除词</span><textarea id="roleTemplateExcludeTerms" rows="3" placeholder="多个词用逗号分隔"></textarea></label>
+                </div>
+                <div class="form-actions"><button id="roleTemplateSubmit" class="button primary" type="submit">创建模板</button></div>
+              </form>
+            </section>
+          </div>
+        </section>
+
         <section id="view-candidates" class="view" aria-labelledby="pageTitle">
           <div class="filter-bar">
             <label class="filter-search"><span>搜索</span><input id="candidateSearch" type="search" placeholder="姓名、账号、简介"></label>
@@ -228,10 +263,35 @@
             <label><span>来源</span><select id="candidateSource"><option value="全部">全部</option><option value="github">GitHub</option><option value="gitee">Gitee</option><option value="gitlab">GitLab</option><option value="huggingface">Hugging Face</option><option value="stackoverflow">Stack Overflow</option></select></label>
             <label><span>联系方式</span><select id="candidateContactability"><option value="all">全部</option><option value="email">有公开邮箱</option><option value="contactable">有公开联系入口</option><option value="profile_only">仅公开主页</option></select></label>
             <label><span>联系进度</span><select id="candidateContactStage"><option>全部</option><option>未联系</option><option>已联系</option><option>已回复</option><option>进入面试</option><option>已发 Offer</option><option>已录用</option><option>不再推进</option></select></label>
-            <button id="candidateFilterButton" class="button secondary" type="button">筛选</button>
+          </div>
+          <div class="candidate-date-filter" aria-label="按最近采集时间筛选">
+            <label><span>最近采集</span><select id="candidateDateRange"><option value="all">全部</option><option value="today">今天</option><option value="this_week">本周</option><option value="last_7_days">最近 7 天</option><option value="last_30_days">最近 30 天</option><option value="this_month">本月</option><option value="custom">自定义</option></select></label>
+            <label><span>开始日期</span><input id="candidateDateFrom" type="date" min="2000-01-01" max="2100-12-31"></label>
+            <label><span>结束日期</span><input id="candidateDateTo" type="date" min="2000-01-01" max="2100-12-31"></label>
+            <button id="candidateDateClearButton" class="button secondary" type="button">清除日期</button>
+            <button id="candidateFilterButton" class="button primary" type="button">筛选</button>
           </div>
           <section class="panel full-width">
-            <div class="section-heading"><h2>候选人</h2><span id="candidateCount" class="badge neutral">0 人</span></div>
+            <div class="section-heading candidate-section-heading">
+              <div>
+                <h2>候选人</h2>
+                <p id="candidateAiStatus" class="section-meta" aria-live="polite">可批量分析尚未完成 AI 的在用候选人；已完成的不会重复分析</p>
+              </div>
+              <div class="candidate-heading-actions">
+                <span id="candidateCount" class="badge neutral">0 人</span>
+                <button id="reanalyzeAiButton" class="button primary" type="button">重新分析未完成 AI</button>
+              </div>
+            </div>
+            <div id="candidateAiProgress" class="ai-batch-progress hidden" aria-live="polite">
+              <div class="ai-batch-progress-header">
+                <strong id="candidateAiProgressTitle">正在准备 AI 分析…</strong>
+                <span id="candidateAiProgressCount">0 / 0</span>
+              </div>
+              <div class="progress ai-batch-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <span id="candidateAiProgressFill" style="width: 0%"></span>
+              </div>
+              <p id="candidateAiProgressMessage" class="section-meta">正在读取任务状态…</p>
+            </div>
             <div class="table-scroll">
               <table class="candidate-table">
                 <thead><tr><th>候选人</th><th>城市</th><th>岗位</th><th>评分</th><th>最近采集</th><th>联系方式</th><th>联系进度</th><th>审核状态</th><th></th></tr></thead>
@@ -251,7 +311,7 @@
             <div class="section-heading"><h2>采集任务</h2><button id="jobRefreshButton" class="text-button" type="button">刷新</button></div>
             <div class="table-scroll">
               <table>
-                <thead><tr><th>ID</th><th>类型</th><th>状态</th><th>进度</th><th>结果</th><th>说明</th><th>创建时间</th><th></th></tr></thead>
+                <thead><tr><th>ID</th><th>类型</th><th>状态</th><th>进度</th><th>结果（实际/目标）</th><th>精确统计</th><th>创建时间</th><th></th></tr></thead>
                 <tbody id="jobTableBody"><tr><td colspan="8" class="empty-cell">暂无任务</td></tr></tbody>
               </table>
             </div>
@@ -324,6 +384,7 @@
       <div class="dialog-body">
         <div class="detail-actions" id="dialogLinks"></div>
         <dl class="detail-grid" id="dialogDetails"></dl>
+        <section><h3>本地 AI 分析</h3><div id="dialogAiAnalysis" class="ai-analysis"></div></section>
         <section><h3>项目证据</h3><div id="dialogEvidence" class="evidence-list"></div></section>
         <section class="candidate-review">
           <h3>候选人核验</h3>
@@ -343,6 +404,7 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="candidate_date_filters.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

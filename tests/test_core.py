@@ -60,6 +60,221 @@ class FrontendStructureTests(unittest.TestCase):
         self.assertIn("candidate.last_seen_at", script)
         self.assertIn("candidate.first_seen_at", script)
 
+    def test_candidate_pool_exposes_date_filter_controls_and_responsive_row(self) -> None:
+        project_dir = Path(__file__).resolve().parents[1]
+        html = (project_dir / "static" / "index.html").read_text(encoding="utf-8")
+        styles = (project_dir / "static" / "styles.css").read_text(encoding="utf-8")
+
+        for element_id in (
+            "candidateDateRange",
+            "candidateDateFrom",
+            "candidateDateTo",
+            "candidateDateClearButton",
+            "candidateFilterButton",
+            "candidateExportButton",
+        ):
+            self.assertEqual(html.count('id="{}"'.format(element_id)), 1)
+
+        date_filter = re.search(
+            r'<div class="candidate-date-filter"[^>]*>(.*?)</div>', html, re.DOTALL
+        )
+        self.assertIsNotNone(date_filter)
+        markup = date_filter.group(1)
+        self.assertIn('id="candidateFilterButton"', markup)
+        self.assertRegex(
+            html,
+            r'<a id="candidateExportButton"[^>]*href="/export/candidates\.xlsx"[^>]*>导出 Excel</a>',
+        )
+        for value in ("all", "today", "this_week", "last_7_days", "last_30_days", "this_month", "custom"):
+            self.assertIn('value="{}"'.format(value), markup)
+        for element_id in ("candidateDateFrom", "candidateDateTo"):
+            self.assertRegex(
+                markup,
+                r'<input id="{}" type="date" min="2000-01-01" max="2100-12-31">'.format(element_id),
+            )
+
+        self.assertLess(html.index('src="candidate_date_filters.js"'), html.index('src="app.js"'))
+        self.assertIn(".candidate-date-filter", styles)
+        self.assertRegex(
+            styles,
+            r"\.candidate-date-filter\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(150px, 1fr\)\) repeat\(2, auto\)",
+        )
+        self.assertRegex(
+            styles,
+            r"\.candidate-date-filter label\s*\{[^}]*min-width:\s*0",
+        )
+        tablet_styles = re.search(r"@media \(max-width: 980px\) \{(.*?)\n\}", styles, re.DOTALL)
+        self.assertIsNotNone(tablet_styles)
+        self.assertIn(".candidate-date-filter", tablet_styles.group(1))
+        self.assertIn("repeat(2, minmax(0, 1fr))", tablet_styles.group(1))
+        mobile_styles = re.search(r"@media \(max-width: 640px\) \{(.*?)\n\}", styles, re.DOTALL)
+        self.assertIsNotNone(mobile_styles)
+        self.assertIn(".candidate-date-filter", mobile_styles.group(1))
+        self.assertIn("grid-template-columns: 1fr", mobile_styles.group(1))
+
+    def test_candidate_filters_keep_independent_draft_and_applied_state(self) -> None:
+        project_dir = Path(__file__).resolve().parents[1]
+        script = (project_dir / "static" / "app.js").read_text(encoding="utf-8")
+
+        for helper in (
+            "candidateDateRangeForPreset",
+            "candidateDateValidationMessage",
+            "candidateExportUrl",
+            "commitCandidatePageAfterFetch",
+            "formatCandidateTime",
+            "normalizeCandidateDateRange",
+        ):
+            self.assertIn(helper, script)
+        for function_name in (
+            "defaultCandidateFilters",
+            "readCandidateFilterControls",
+            "normalizeCandidateFilters",
+            "writeCandidateDateControls",
+            "buildCandidateListParams",
+            "hasActiveCandidateFilters",
+            "updateCandidateExportButton",
+            "syncCandidateDraft",
+        ):
+            self.assertIn("function {}(".format(function_name), script)
+
+        self.assertIn("candidateFilters: {", script)
+        self.assertIn("draft: defaultCandidateFilters()", script)
+        self.assertIn("applied: defaultCandidateFilters()", script)
+        for field in (
+            "search",
+            "status",
+            "city",
+            "source",
+            "contactability",
+            "contact_stage",
+            "date_range",
+            "last_seen_from",
+            "last_seen_to",
+        ):
+            self.assertIn("{}:".format(field), script)
+        self.assertIn("candidateExportUrl(state.candidateFilters.applied)", script)
+
+    def test_candidate_page_commits_filters_and_pagination_only_after_fetch(self) -> None:
+        project_dir = Path(__file__).resolve().parents[1]
+        script = (project_dir / "static" / "app.js").read_text(encoding="utf-8")
+
+        for function_name in (
+            "fetchCandidatePage",
+            "commitCandidatePage",
+            "loadCandidatePage",
+            "loadCandidates",
+            "applyCandidateFilters",
+        ):
+            self.assertIn("function {}(".format(function_name), script)
+        self.assertIn("commitCandidatePageAfterFetch(", script)
+        self.assertIn("state.candidateFilters.applied = { ...filters }", script)
+        self.assertIn("candidateDateValidationMessage(filters)", script)
+        self.assertIn("candidateRequestId: 0", script)
+        self.assertIn("const requestId = ++state.candidateRequestId", script)
+        self.assertIn(
+            "const isCurrent = () => requestId === state.candidateRequestId",
+            script,
+        )
+        self.assertRegex(
+            script,
+            r"commitCandidatePageAfterFetch\([\s\S]*?isCurrent,\s*\);",
+        )
+        self.assertIn("last_seen_from", script)
+        self.assertIn("last_seen_to", script)
+        self.assertRegex(
+            script,
+            r"if \(normalized\.last_seen_from\) params\.set\(\"last_seen_from\"",
+        )
+        self.assertRegex(
+            script,
+            r"if \(normalized\.last_seen_to\) params\.set\(\"last_seen_to\"",
+        )
+        self.assertIn("const targetOffset = Math.max(0,", script)
+        self.assertNotIn(
+            "state.candidatePagination.offset += state.candidatePagination.limit",
+            script,
+        )
+
+    def test_candidate_filter_events_empty_state_and_times_use_applied_filters(self) -> None:
+        project_dir = Path(__file__).resolve().parents[1]
+        script = (project_dir / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('cell.textContent = hasActiveCandidateFilters()', script)
+        self.assertIn('"当前筛选条件下暂无候选人"', script)
+        self.assertIn('"暂无候选人"', script)
+        self.assertIn(
+            "formatCandidateTime(candidate.last_seen_at)",
+            script,
+        )
+        self.assertIn(
+            "formatCandidateTime(candidate.first_seen_at)",
+            script,
+        )
+        self.assertIn(
+            'addDetail(details, "来源更新时间", formatCandidateTime(candidate.source_updated_at))',
+            script,
+        )
+        self.assertIn(
+            '$("#candidateFilterButton").addEventListener("click", applyCandidateFilters)',
+            script,
+        )
+        self.assertIn(
+            'if (event.key === "Enter") applyCandidateFilters();',
+            script,
+        )
+        self.assertIn('$("#candidateDateRange").addEventListener("change"', script)
+        self.assertIn("candidateDateRangeForPreset(event.currentTarget.value)", script)
+        self.assertIn('$("#candidateDateRange").value = "custom"', script)
+        self.assertIn('$("#candidateDateClearButton").addEventListener("click"', script)
+        self.assertIn('writeCandidateDateControls(candidateDateRangeForPreset("all"))', script)
+        self.assertIn("syncCandidateDraft();", script)
+
+    def test_manual_modes_have_independent_default_on_ai_controls(self) -> None:
+        project_dir = Path(__file__).resolve().parents[1]
+        html = (project_dir / "static" / "index.html").read_text(encoding="utf-8")
+        script = (project_dir / "static" / "app.js").read_text(encoding="utf-8")
+        url_start = html.index('<div id="urlFields"')
+        url_end = html.index("</section>", url_start)
+        url_markup = html[url_start:url_end]
+        self.assertIn('id="manualEnableAI" type="checkbox" checked', html)
+        self.assertIn('id="manualUrlEnableAI" type="checkbox" checked', url_markup)
+        self.assertIn(
+            'state.manualMode === "url" ? $("#manualUrlEnableAI") : $("#manualEnableAI")',
+            script,
+        )
+        self.assertIn("enable_ai: aiEnabled", script)
+        self.assertIn("use_local_ai: aiEnabled", script)
+
+    def test_candidate_ai_status_shows_fallback_reason_separately(self) -> None:
+        project_dir = Path(__file__).resolve().parents[1]
+        html = (project_dir / "static" / "index.html").read_text(encoding="utf-8")
+        script = (project_dir / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_dir / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("function aiStatusText(candidate)", script)
+        self.assertIn("function aiStatusReason(candidate)", script)
+        self.assertIn('"不可用，已回退规则"', script)
+        self.assertIn("ai_match_reason", script)
+        self.assertIn("score-ai-reason", script)
+        self.assertIn("状态：AI 未启用", script)
+        self.assertIn("原因", script)
+        self.assertIn(".score-ai-reason", styles)
+        self.assertIn('id="dialogAiAnalysis"', html)
+
+    def test_candidate_pool_exposes_batch_ai_reanalysis_controls(self) -> None:
+        project_dir = Path(__file__).resolve().parents[1]
+        html = (project_dir / "static" / "index.html").read_text(encoding="utf-8")
+        script = (project_dir / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_dir / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('id="reanalyzeAiButton"', html)
+        self.assertIn('id="candidateAiProgress"', html)
+        self.assertIn('id="candidateAiProgressFill"', html)
+        self.assertIn('/api/candidates/reanalyze-ai', script)
+        self.assertIn('/api/jobs/${encodeURIComponent(jobId)}', script)
+        self.assertIn("error.status = response.status", script)
+        self.assertIn("if (error.status !== 404) throw error", script)
+        self.assertIn('ai_match_status', script)
+        self.assertIn('.ai-batch-progress', styles)
+
 
 class SourceHealthTests(unittest.TestCase):
     def test_static_source_health_distinguishes_supported_and_planned_sources(self) -> None:
@@ -503,6 +718,32 @@ class DatabaseTests(unittest.TestCase):
             ],
         }
 
+    def add_candidate_at(self, external_id, collected_at, **overrides):
+        candidate = self.candidate(external_id)
+        candidate.update(
+            {
+                "external_id": external_id,
+                "username": external_id,
+                "display_name": external_id,
+                "profile_url": "https://profiles.example.test/{}".format(external_id),
+                "contact_url": "https://profiles.example.test/{}".format(external_id),
+                "contact_email": "{}@example.test".format(external_id),
+                "evidence": [
+                    {
+                        "title": "{}-project".format(external_id),
+                        "url": "https://code.example.test/{}/project".format(external_id),
+                        "description": "synthetic agent project",
+                        "stars": 1,
+                        "is_fork": False,
+                    }
+                ],
+            }
+        )
+        candidate.update(overrides)
+        with patch.object(db, "now_iso", return_value=collected_at):
+            candidate_id, _ = db.upsert_candidate(candidate)
+        return candidate_id
+
     def enable_schedule(self) -> None:
         schedule = db.get_schedule()
         schedule["enabled"] = True
@@ -566,6 +807,172 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(first_id, second_id)
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["items"][0]["display_name"], "Updated Name")
+
+    def test_candidate_date_filter_validates_exact_supported_dates(self) -> None:
+        cases = (
+            ("last_seen_from", "2026-8-18", "开始日期格式无效，请使用 YYYY-MM-DD"),
+            ("last_seen_from", "2026-02-30", "开始日期格式无效，请使用 YYYY-MM-DD"),
+            ("last_seen_from", " 2026-08-18", "开始日期格式无效，请使用 YYYY-MM-DD"),
+            ("last_seen_from", "２０２６-０８-１８", "开始日期格式无效，请使用 YYYY-MM-DD"),
+            ("last_seen_from", "1999-12-31", "日期必须在 2000-01-01 至 2100-12-31 之间"),
+            ("last_seen_to", "2101-01-01", "日期必须在 2000-01-01 至 2100-12-31 之间"),
+        )
+        for key, value, message in cases:
+            with self.subTest(key=key, value=value):
+                with self.assertRaisesRegex(ValueError, re.escape(message)):
+                    db.list_candidates({key: value})
+
+    def test_candidate_date_filter_rejects_reversed_range(self) -> None:
+        with self.assertRaisesRegex(ValueError, re.escape("开始日期不能晚于结束日期")):
+            db.list_candidates(
+                {"last_seen_from": "2026-08-19", "last_seen_to": "2026-08-18"}
+            )
+
+    def test_candidate_date_filter_builds_beijing_time_boundaries(self) -> None:
+        self.assertEqual(db._candidate_date_bounds({}), (None, None))
+        self.assertEqual(
+            db._candidate_date_bounds({"last_seen_from": "2026-08-18"}),
+            ("2026-08-18T00:00:00+08:00", None),
+        )
+        self.assertEqual(
+            db._candidate_date_bounds(
+                {"last_seen_from": "2026-08-18", "last_seen_to": "2026-08-18"}
+            ),
+            ("2026-08-18T00:00:00+08:00", "2026-08-19T00:00:00+08:00"),
+        )
+        self.assertEqual(
+            db._candidate_date_bounds({"last_seen_to": "2100-12-31"}),
+            (None, "2101-01-01T00:00:00+08:00"),
+        )
+
+    def test_candidate_date_filter_uses_inclusive_beijing_boundaries(self) -> None:
+        self.add_candidate_at("before", "2026-08-17T15:59:59+00:00")
+        self.add_candidate_at("start", "2026-08-17T16:00:00+00:00")
+        self.add_candidate_at("late", "2026-08-18T23:59:59.999999+08:00")
+        self.add_candidate_at("next-day", "2026-08-19T00:00:00+08:00")
+
+        result = db.list_candidates(
+            {"last_seen_from": "2026-08-18", "last_seen_to": "2026-08-18"}
+        )
+
+        self.assertEqual({item["external_id"] for item in result["items"]}, {"start", "late"})
+        self.assertEqual(result["total"], 2)
+
+    def test_candidate_date_filter_supports_open_ended_ranges(self) -> None:
+        self.add_candidate_at("old", "2026-08-10T10:00:00+08:00")
+        self.add_candidate_at("new", "2026-08-20T10:00:00+08:00")
+
+        from_result = db.list_candidates({"last_seen_from": "2026-08-18"})
+        to_result = db.list_candidates({"last_seen_to": "2026-08-18"})
+
+        self.assertEqual({item["external_id"] for item in from_result["items"]}, {"new"})
+        self.assertEqual({item["external_id"] for item in to_result["items"]}, {"old"})
+
+    def test_export_candidates_applies_date_filter_and_matching_evidence(self) -> None:
+        self.add_candidate_at("in-range", "2026-08-18T09:00:00+08:00")
+        self.add_candidate_at("out-of-range", "2026-08-17T09:00:00+08:00")
+
+        result = db.export_candidates(
+            {"last_seen_from": "2026-08-18", "last_seen_to": "2026-08-18"}
+        )
+
+        self.assertEqual([item["external_id"] for item in result], ["in-range"])
+        self.assertEqual([item["title"] for item in result[0]["evidence"]], ["in-range-project"])
+
+    def test_export_candidates_without_filters_remains_backward_compatible(self) -> None:
+        self.add_candidate_at("first", "2026-08-17T09:00:00+08:00", match_score=70)
+        self.add_candidate_at("second", "2026-08-18T09:00:00+08:00", match_score=90)
+
+        result = db.export_candidates()
+
+        self.assertEqual([item["external_id"] for item in result], ["second", "first"])
+        self.assertEqual(
+            [[evidence["title"] for evidence in item["evidence"]] for item in result],
+            [["second-project"], ["first-project"]],
+        )
+
+    def test_export_candidates_rejects_invalid_and_reversed_date_filters(self) -> None:
+        with self.assertRaisesRegex(ValueError, re.escape("开始日期格式无效，请使用 YYYY-MM-DD")):
+            db.export_candidates({"last_seen_from": "2026-02-30"})
+        with self.assertRaisesRegex(ValueError, re.escape("开始日期不能晚于结束日期")):
+            db.export_candidates(
+                {"last_seen_from": "2026-08-19", "last_seen_to": "2026-08-18"}
+            )
+
+    def test_export_candidates_reads_candidates_and_evidence_from_one_snapshot(self) -> None:
+        candidate_id = self.add_candidate_at("in-range", "2026-08-18T09:00:00+08:00")
+        archived = {"value": False}
+
+        class ArchiveAfterCandidateSelectConnection(db.ClosingConnection):
+            def execute(self, sql, parameters=()):
+                cursor = super().execute(sql, parameters)
+                if not archived["value"] and "SELECT * FROM candidates" in sql:
+                    archived["value"] = True
+                    with sqlite3.connect(str(db.db_path())) as writer:
+                        writer.execute(
+                            "UPDATE candidates SET archived_at = ? WHERE id = ?",
+                            ("2026-08-18T10:00:00+08:00", candidate_id),
+                        )
+                return cursor
+
+        with patch.object(db, "ClosingConnection", ArchiveAfterCandidateSelectConnection):
+            result = db.export_candidates(
+                {"last_seen_from": "2026-08-18", "last_seen_to": "2026-08-18"}
+            )
+
+        self.assertTrue(archived["value"])
+        self.assertEqual([item["external_id"] for item in result], ["in-range"])
+        self.assertEqual([item["title"] for item in result[0]["evidence"]], ["in-range-project"])
+
+    def test_candidate_date_filter_combines_with_filters_and_pagination(self) -> None:
+        self.add_candidate_at("beijing-a", "2026-08-18T09:00:00+08:00")
+        self.add_candidate_at("beijing-b", "2026-08-18T10:00:00+08:00")
+        self.add_candidate_at(
+            "chongqing", "2026-08-18T11:00:00+08:00", city="重庆"
+        )
+        self.add_candidate_at(
+            "wrong-source", "2026-08-18T11:30:00+08:00", source="gitee"
+        )
+        self.add_candidate_at(
+            "profile-only",
+            "2026-08-18T11:45:00+08:00",
+            contact_email="",
+            contact_url="https://profiles.example.test/profile-only",
+        )
+        self.add_candidate_at("outside", "2026-08-17T11:00:00+08:00")
+        wrong_status = self.add_candidate_at("wrong-status", "2026-08-18T12:00:00+08:00")
+        archived = self.add_candidate_at("archived", "2026-08-18T13:00:00+08:00")
+        with db.connect() as connection:
+            connection.execute(
+                "UPDATE candidates SET review_status = ? WHERE id = ?",
+                ("人才储备", wrong_status),
+            )
+            connection.execute(
+                "UPDATE candidates SET archived_at = ? WHERE id = ?",
+                ("2026-08-18T14:00:00+08:00", archived),
+            )
+
+        filters = {
+            "last_seen_from": "2026-08-18",
+            "last_seen_to": "2026-08-18",
+            "city": "北京",
+            "source": "github",
+            "status": "待审核",
+            "contactability": "email",
+        }
+        unpaginated = db.list_candidates(filters)
+        self.assertEqual(unpaginated["total"], 2)
+        self.assertEqual(
+            {item["external_id"] for item in unpaginated["items"]},
+            {"beijing-a", "beijing-b"},
+        )
+
+        result = db.list_candidates({**filters, "limit": 1, "offset": 1})
+
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(len(result["items"]), 1)
+        returned_ids = {item["external_id"] for item in result["items"]}
+        self.assertTrue(returned_ids <= {"beijing-a", "beijing-b"})
 
     def test_review_and_report_keep_clickable_contacts(self) -> None:
         candidate_id, _ = db.upsert_candidate(self.candidate())
@@ -941,14 +1348,24 @@ class JobSelectionTests(unittest.TestCase):
         self.assertEqual(job["status"], "已完成")
         self.assertEqual(job["result_count"], 1)
         self.assertEqual(job["candidates"][0]["username"], "gitee-contact")
-        github_collector.assert_called_once()
-        gitee_collector.assert_called_once()
+        expected_keywords = ["agent", "langgraph", "智能体"]
+        self.assertEqual(
+            [call.args[0] for call in github_collector.call_args_list],
+            expected_keywords,
+        )
+        self.assertEqual(
+            [call.args[0] for call in gitee_collector.call_args_list],
+            expected_keywords,
+        )
 
     def test_contact_priority_can_be_disabled(self) -> None:
         job, _, gitee_collector = self.run_selection(False)
 
         self.assertEqual(job["candidates"][0]["username"], "github-top")
-        gitee_collector.assert_called_once()
+        self.assertEqual(
+            [call.args[0] for call in gitee_collector.call_args_list],
+            ["agent", "langgraph", "智能体"],
+        )
 
     def test_existing_verified_email_is_reused_before_selection(self) -> None:
         known = self.candidate("gitee", "known-contact", 75)
@@ -981,7 +1398,260 @@ class JobSelectionTests(unittest.TestCase):
         job = db.get_job(job_id)
         self.assertEqual(job["candidates"][0]["username"], "known-contact")
         self.assertEqual(job["candidates"][0]["contact_level"], "A")
-        self.assertIn("1 人有公开联系方式", job["message"])
+        self.assertIn("目标 1", job["message"])
+        self.assertIn("实际 1", job["message"])
+        self.assertIn("新增 0", job["message"])
+        self.assertIn("已有 1", job["message"])
+        self.assertIn("公开联系方式 1", job["message"])
+
+    def test_job_log_reports_target_actual_dedup_and_insert_counts(self) -> None:
+        candidates = [self.candidate("github", "candidate-{}".format(index), 70 - index) for index in range(8)]
+        collector = Mock(side_effect=[candidates, [], []])
+        config = normalize_config(
+            {
+                "target": 10,
+                "roles": ["AI Agent 工程师"],
+                "cities": ["北京"],
+                "sources": ["github"],
+                "prefer_contactable": True,
+            }
+        )
+        job_id = db.create_job("手动采集", config)
+        with patch.dict(jobs.SEARCH_COLLECTORS, {"github": collector}), patch.dict(
+            os.environ, {"GITHUB_TOKEN": "token-for-test"}
+        ):
+            JobManager()._run_search_job(job_id, config)
+        job = db.get_job(job_id)
+        self.assertEqual(job["target_count"], 10)
+        self.assertEqual(job["result_count"], 8)
+        self.assertEqual(job["discovered_count"], 8)
+        self.assertEqual(job["unique_count"], 8)
+        self.assertEqual(job["duplicate_count"], 0)
+        self.assertEqual(job["filtered_count"], 0)
+        self.assertEqual(job["inserted_count"], 8)
+        self.assertEqual(job["existing_count"], 0)
+        self.assertIn("目标 10", job["message"])
+        self.assertIn("实际 8", job["message"])
+        self.assertIn("缺口 2", job["message"])
+
+    def test_job_log_distinguishes_existing_candidates_and_task_duplicates(self) -> None:
+        existing = self.candidate("github", "existing", 80)
+        db.upsert_candidate(existing)
+        new = self.candidate("github", "new", 79)
+        collector = Mock(side_effect=[[existing, new, existing], [], []])
+        config = normalize_config(
+            {
+                "target": 2,
+                "roles": ["AI Agent 工程师"],
+                "cities": ["北京"],
+                "sources": ["github"],
+            }
+        )
+        job_id = db.create_job("手动采集", config)
+        with patch.dict(jobs.SEARCH_COLLECTORS, {"github": collector}), patch.dict(
+            os.environ, {"GITHUB_TOKEN": "token-for-test"}
+        ):
+            JobManager()._run_search_job(job_id, config)
+        job = db.get_job(job_id)
+        self.assertEqual(job["result_count"], 2)
+        self.assertEqual(job["discovered_count"], 3)
+        self.assertEqual(job["unique_count"], 2)
+        self.assertEqual(job["duplicate_count"], 1)
+        self.assertEqual(job["inserted_count"], 1)
+        self.assertEqual(job["existing_count"], 1)
+        self.assertIn("任务内去重 1", job["message"])
+        self.assertIn("新增 1", job["message"])
+        self.assertIn("已有 1", job["message"])
+
+    def test_job_log_counts_failed_source_calls_without_losing_successful_results(self) -> None:
+        successful = self.candidate("github", "reachable", 80)
+        github = Mock(side_effect=[[successful], [], []])
+        gitee = Mock(side_effect=collectors.NetworkUnavailable("VPN unavailable"))
+        config = normalize_config(
+            {
+                "target": 1,
+                "roles": ["AI Agent 工程师"],
+                "cities": ["北京"],
+                "sources": ["github", "gitee"],
+            }
+        )
+        job_id = db.create_job("手动采集", config)
+        with patch.dict(jobs.SEARCH_COLLECTORS, {"github": github, "gitee": gitee}), patch.dict(
+            os.environ, {"GITHUB_TOKEN": "test-token"}
+        ):
+            JobManager()._run_search_job(job_id, config)
+        job = db.get_job(job_id)
+        self.assertEqual(job["result_count"], 1)
+        self.assertEqual(job["source_success_count"], 3)
+        self.assertEqual(job["source_failure_count"], 3)
+        self.assertEqual(job["source_stats"][1]["failures"], 3)
+        self.assertIn("来源失败 3", job["message"])
+        self.assertIn("Gitee", job["error"])
+
+    def test_url_failure_persists_one_target_and_source_reason(self) -> None:
+        config = normalize_config(
+            {
+                "mode": "url",
+                # The submitted search target may still be 10, but URL mode
+                # represents exactly one requested public profile.
+                "target": 10,
+                "url": "https://github.com/example-user",
+                "roles": ["AI Agent 工程师"],
+                "cities": ["北京"],
+                "sources": ["github"],
+                "use_local_ai": False,
+            }
+        )
+        job_id = db.create_job("手动采集", config)
+        with patch(
+            "jobs.analyze_public_url",
+            side_effect=collectors.NetworkUnavailable("offline"),
+        ):
+            JobManager()._run_job(job_id, "手动采集", config)
+
+        job = db.get_job(job_id)
+        self.assertEqual(job["status"], "网络不可用")
+        self.assertEqual(job["target_count"], 1)
+        self.assertEqual(job["result_count"], 0)
+        self.assertEqual(job["source_failure_count"], 1)
+        self.assertEqual(job["source_stats"][0]["source"], "github")
+        self.assertEqual(job["source_stats"][0]["attempts"], 1)
+        self.assertEqual(job["source_stats"][0]["failures"], 1)
+        self.assertEqual(job["source_stats"][0]["errors"], ["offline"])
+        self.assertIn("目标 1", job["message"])
+        self.assertIn("实际 0", job["message"])
+        self.assertIn("来源失败 1", job["message"])
+
+    def test_save_failure_keeps_completed_batch_metrics(self) -> None:
+        candidates = [
+            self.candidate("github", "partial-1", 80),
+            self.candidate("github", "partial-2", 79),
+        ]
+        collector = Mock(side_effect=[candidates, [], []])
+        config = normalize_config(
+            {
+                "target": 2,
+                "roles": ["AI Agent 工程师"],
+                "cities": ["北京"],
+                "sources": ["github"],
+                "use_local_ai": False,
+            }
+        )
+        job_id = db.create_job("手动采集", config)
+        original_upsert = db.upsert_candidate
+        calls = {"count": 0}
+
+        def fail_on_second(candidate, job_id=None):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                raise RuntimeError("synthetic save failure")
+            return original_upsert(candidate, job_id=job_id)
+
+        with patch.dict(jobs.SEARCH_COLLECTORS, {"github": collector}), patch.dict(
+            os.environ, {"GITHUB_TOKEN": "test-token"}
+        ), patch("jobs.db.upsert_candidate", side_effect=fail_on_second):
+            with self.assertRaisesRegex(RuntimeError, "synthetic save failure"):
+                JobManager()._run_job(job_id, "手动采集", config)
+
+        job = db.get_job(job_id)
+        self.assertEqual(job["status"], "执行失败")
+        self.assertEqual(job["target_count"], 2)
+        self.assertEqual(job["discovered_count"], 2)
+        self.assertEqual(job["unique_count"], 2)
+        self.assertEqual(job["result_count"], 1)
+        self.assertEqual(job["inserted_count"], 1)
+        self.assertEqual(job["existing_count"], 0)
+        self.assertIn("目标 2", job["message"])
+        self.assertIn("实际 1", job["message"])
+        self.assertIn("新增 1", job["message"])
+        self.assertIn("保存阶段异常", job["message"])
+
+    def test_url_cancel_does_not_report_unsaved_profile_as_filtered(self) -> None:
+        candidate = self.candidate("github", "cancelled-url", 80)
+        config = normalize_config(
+            {
+                "mode": "url",
+                "target": 10,
+                "url": "https://github.com/cancelled-url",
+                "roles": ["AI Agent 工程师"],
+                "cities": ["北京"],
+                "sources": ["github"],
+                "use_local_ai": False,
+            }
+        )
+        job_id = db.create_job("手动采集", config)
+        with patch("jobs.analyze_public_url", return_value=candidate), patch(
+            "jobs.db.job_cancel_requested", return_value=True
+        ):
+            JobManager()._run_job(job_id, "手动采集", config)
+
+        job = db.get_job(job_id)
+        self.assertEqual(job["status"], "已取消")
+        self.assertEqual(job["target_count"], 1)
+        self.assertEqual(job["result_count"], 0)
+        self.assertEqual(job["filtered_count"], 0)
+        self.assertIn("取消未保存 1", job["message"])
+
+    def test_job_log_reports_completed_local_ai_analysis(self) -> None:
+        collector = Mock(side_effect=[[self.candidate("github", "ai-ready", 70)], [], []])
+        config = normalize_config(
+            {
+                "target": 1,
+                "roles": ["AI Agent 工程师"],
+                "cities": ["北京"],
+                "sources": ["github"],
+                "use_local_ai": True,
+            }
+        )
+        ai_result = {
+            "match_score": 90,
+            "confidence": 0.8,
+            "summary": "strong public project evidence",
+            "evidence": [],
+            "model": "qwen3:4b",
+            "matched_at": "2026-08-17T10:00:00+08:00",
+        }
+        job_id = db.create_job("手动采集", config)
+        with patch.dict(jobs.SEARCH_COLLECTORS, {"github": collector}), patch.dict(
+            os.environ, {"GITHUB_TOKEN": "test-token"}
+        ), patch("jobs.match_candidate", return_value=ai_result):
+            JobManager()._run_search_job(job_id, config)
+        job = db.get_job(job_id)
+        self.assertTrue(job["ai_requested"])
+        self.assertEqual(job["ai_completed_count"], 1)
+        self.assertEqual(job["ai_fallback_count"], 0)
+        self.assertEqual(job["candidates"][0]["ai_match_status"], "已完成")
+        self.assertIn("AI 完成 1", job["message"])
+        self.assertIn("AI 回退 0", job["message"])
+
+    def test_one_ai_runtime_failure_falls_back_once_for_the_whole_job(self) -> None:
+        candidates = [
+            self.candidate("github", "ai-offline-1", 70),
+            self.candidate("github", "ai-offline-2", 69),
+        ]
+        collector = Mock(side_effect=[candidates, [], []])
+        config = normalize_config(
+            {
+                "target": 2,
+                "roles": ["AI Agent 工程师"],
+                "cities": ["北京"],
+                "sources": ["github"],
+                "use_local_ai": True,
+            }
+        )
+        job_id = db.create_job("手动采集", config)
+        matcher = Mock(side_effect=jobs.OllamaUnavailable("local model offline"))
+        with patch.dict(jobs.SEARCH_COLLECTORS, {"github": collector}), patch.dict(
+            os.environ, {"GITHUB_TOKEN": "test-token"}
+        ), patch("jobs.match_candidate", matcher):
+            JobManager()._run_search_job(job_id, config)
+        job = db.get_job(job_id)
+        self.assertEqual(matcher.call_count, 1)
+        self.assertEqual(job["ai_completed_count"], 0)
+        self.assertEqual(job["ai_fallback_count"], 2)
+        self.assertTrue(all(item["ai_match_status"] == "不可用，已回退规则" for item in job["candidates"]))
+        self.assertIn("AI 回退 2", job["message"])
+        self.assertIn("AI 原因 local model offline", job["message"])
 
 
 class ExcelLinkTests(unittest.TestCase):
@@ -1155,20 +1825,60 @@ class AppHandlerTests(unittest.TestCase):
             os.environ["TALENT_RADAR_DB"] = self.previous_db
         self.temp_dir.cleanup()
 
-    def request(self, method: str, path: str, payload=None):
+    def request_raw(self, method: str, path: str, payload=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
         headers = {}
         body = None
         if payload is not None:
             headers["Content-Type"] = "application/json"
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        connection.request(method, path, body=body, headers=headers)
-        response = connection.getresponse()
-        result = response.read().decode("utf-8")
-        headers = dict(response.getheaders())
-        connection.close()
-        parsed = json.loads(result) if result and headers.get("Content-Type", "").startswith("application/json") else result
-        return response.status, headers, parsed
+        try:
+            connection.request(method, path, body=body, headers=headers)
+            response = connection.getresponse()
+            raw_bytes = response.read()
+            headers = dict(response.getheaders())
+            return response.status, headers, raw_bytes
+        finally:
+            connection.close()
+
+    def request(self, method: str, path: str, payload=None):
+        status, headers, raw_bytes = self.request_raw(method, path, payload)
+        content_type = headers.get("Content-Type", "").lower()
+        is_textual = content_type.startswith("text/") or content_type.startswith(
+            ("application/json", "application/javascript", "application/xml")
+        )
+        is_binary = bool(content_type) and not is_textual
+        if is_binary:
+            return status, headers, raw_bytes
+        result = raw_bytes.decode("utf-8")
+        parsed = json.loads(result) if result and content_type.startswith("application/json") else result
+        return status, headers, parsed
+
+    def add_candidate_at(self, external_id, collected_at, evidence_title=None):
+        candidate = {
+            "source": "github",
+            "external_id": external_id,
+            "username": external_id,
+            "display_name": external_id,
+            "city": "北京",
+            "profile_url": "https://profiles.example.test/{}".format(external_id),
+            "contact_url": "https://profiles.example.test/{}".format(external_id),
+            "contact_email": "{}@example.test".format(external_id),
+            "suggested_role": "AI Agent 工程师",
+            "match_score": 80,
+            "evidence": [
+                {
+                    "title": evidence_title or "{}-project".format(external_id),
+                    "url": "https://code.example.test/{}/project".format(external_id),
+                    "description": "synthetic agent project",
+                    "stars": 1,
+                    "is_fork": False,
+                }
+            ],
+        }
+        with patch.object(db, "now_iso", return_value=collected_at):
+            candidate_id, _ = db.upsert_candidate(candidate)
+        return candidate_id
 
     def test_invalid_query_returns_json_error_and_security_header(self) -> None:
         status, _, payload = self.request("GET", "/api/jobs?limit=bad")
@@ -1177,6 +1887,94 @@ class AppHandlerTests(unittest.TestCase):
         status, headers, _ = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertEqual(headers["X-Frame-Options"], "DENY")
+
+    def test_invalid_candidate_date_returns_400_on_list(self) -> None:
+        status, _, payload = self.request(
+            "GET", "/api/candidates?last_seen_from=2026-02-30"
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("error", payload)
+        self.assertEqual(payload["error"], "开始日期格式无效，请使用 YYYY-MM-DD")
+
+    def test_candidate_date_query_filters_list_endpoint(self) -> None:
+        self.add_candidate_at("in-range", "2026-08-18T10:00:00+08:00")
+        self.add_candidate_at("outside", "2026-08-17T10:00:00+08:00")
+
+        status, _, payload = self.request(
+            "GET", "/api/candidates?last_seen_from=2026-08-18&last_seen_to=2026-08-18"
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["items"][0]["external_id"], "in-range")
+
+    def test_invalid_candidate_date_returns_400_on_export(self) -> None:
+        status, headers, payload = self.request(
+            "GET", "/export/candidates.xlsx?last_seen_to=2101-01-01"
+        )
+
+        self.assertEqual(status, 400)
+        self.assertTrue(headers["Content-Type"].startswith("application/json"))
+        self.assertIn("error", payload)
+
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl is not installed")
+    def test_candidate_excel_export_applies_date_query(self) -> None:
+        from openpyxl import load_workbook
+
+        self.add_candidate_at(
+            "in-range",
+            "2026-08-18T09:00:00+08:00",
+            evidence_title="in-range-evidence",
+        )
+        self.add_candidate_at(
+            "outside",
+            "2026-08-17T09:00:00+08:00",
+            evidence_title="outside-evidence",
+        )
+
+        status, headers, content = self.request(
+            "GET",
+            "/export/candidates.xlsx?last_seen_from=2026-08-18&last_seen_to=2026-08-18",
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(
+            headers["Content-Type"].startswith(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        )
+        workbook = load_workbook(io.BytesIO(content), data_only=False)
+        self.addCleanup(workbook.close)
+        candidate_names = [
+            cell.value
+            for cell in workbook["候选人总表"]["B"][6:]
+            if cell.value is not None
+        ]
+        evidence_titles = [
+            cell.value
+            for cell in workbook["项目证据"]["C"][3:]
+            if cell.value is not None
+        ]
+        self.assertEqual(candidate_names, ["in-range"])
+        self.assertEqual(evidence_titles, ["in-range-evidence"])
+
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl is not installed")
+    def test_candidate_excel_export_supports_empty_date_result(self) -> None:
+        from openpyxl import load_workbook
+
+        self.add_candidate_at("outside", "2026-08-17T09:00:00+08:00")
+
+        status, _, content = self.request(
+            "GET",
+            "/export/candidates.xlsx?last_seen_from=2026-08-18&last_seen_to=2026-08-18",
+        )
+
+        self.assertEqual(status, 200)
+        workbook = load_workbook(io.BytesIO(content), data_only=False)
+        self.addCleanup(workbook.close)
+        candidate_sheet = workbook["候选人总表"]
+        self.assertEqual(candidate_sheet["B6"].value, "候选人")
+        self.assertIsNone(candidate_sheet["B7"].value)
 
     def test_source_health_endpoint_returns_static_catalog_without_probe(self) -> None:
         status, _, payload = self.request("GET", "/api/source-health")

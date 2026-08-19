@@ -92,6 +92,7 @@ button, select { cursor: pointer; }
 .metric small { display: block; margin-top: 7px; color: var(--muted); font-size: 12px; }
 
 .overview-grid, .form-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.roles-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, .9fr); gap: 16px; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 18px; }
 .panel.full-width { margin-top: 16px; }
 .section-heading { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
@@ -139,7 +140,7 @@ tbody tr:hover { background: #fbfcfc; }
 .field-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .field-wide { grid-column: 1 / -1; }
 .field { display: grid; gap: 6px; }
-.field > span, .filter-bar label > span { color: #46565e; font-size: 12px; font-weight: 700; }
+.field > span, .filter-bar label > span, .candidate-date-filter label > span { color: #46565e; font-size: 12px; font-weight: 700; }
 input, select, textarea { width: 100%; border: 1px solid #cbd5d9; border-radius: 5px; color: var(--text); background: #fff; }
 input, select { min-height: 38px; padding: 7px 9px; }
 textarea { resize: vertical; padding: 9px; }
@@ -178,6 +179,17 @@ legend { margin-bottom: 8px; color: #46565e; font-size: 12px; font-weight: 700; 
 .preference-field strong { display: block; }
 .preference-field .switch { flex: 0 0 auto; }
 .form-panel > .preference-field { margin-top: 14px; }
+.preference-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 14px 18px; }
+
+.role-template-list { display: grid; gap: 10px; }
+.role-template-card { padding: 13px; border: 1px solid var(--line); border-radius: 5px; background: #fbfcfc; }
+.role-template-card header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.role-template-card header strong { overflow-wrap: anywhere; }
+.role-template-meta, .role-template-terms { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.role-template-terms { color: #46565e; overflow-wrap: anywhere; }
+.role-template-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
+.role-template-form { display: grid; gap: 13px; }
+.template-term-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 
 .management-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .storage-list { display: grid; gap: 10px; margin: 0; }
@@ -193,8 +205,23 @@ legend { margin-bottom: 8px; color: #46565e; font-size: 12px; font-weight: 700; 
 .archived-table { min-width: 850px; }
 .archived-table .muted { color: var(--muted); font-size: 12px; }
 
-.filter-bar { display: grid; grid-template-columns: minmax(180px, 2fr) repeat(5, minmax(120px, 1fr)) auto; align-items: end; gap: 10px; margin-bottom: 14px; }
+.filter-bar { display: grid; grid-template-columns: minmax(180px, 2fr) repeat(5, minmax(120px, 1fr)); align-items: end; gap: 10px; margin-bottom: 10px; }
 .filter-bar label { display: grid; gap: 5px; }
+.candidate-date-filter { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)) repeat(2, auto); align-items: end; gap: 10px; margin-bottom: 14px; min-width: 0; }
+.candidate-date-filter label { display: grid; min-width: 0; gap: 5px; }
+.candidate-date-filter .button { min-height: 38px; }
+.candidate-section-heading { align-items: flex-start; }
+.candidate-heading-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.ai-batch-progress { display: grid; gap: 7px; margin: -2px 0 15px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 5px; background: #f8fafb; }
+.ai-batch-progress.hidden { display: none; }
+.ai-batch-progress-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ai-batch-progress-header strong { overflow-wrap: anywhere; }
+.ai-batch-progress-header span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.ai-batch-progress-bar { width: 100%; height: 8px; }
+.ai-batch-progress-bar span { transition: width .2s ease; }
+.ai-batch-progress[data-state="error"] { border-color: #f0c6c1; background: var(--danger-soft); }
+.ai-batch-progress[data-state="error"] .progress span { background: var(--danger); }
+.ai-batch-progress[data-state="complete"] { border-color: #b9e2db; background: var(--accent-soft); }
 .candidate-table { min-width: 1240px; }
 .candidate-name strong, .candidate-name span { display: block; }
 .candidate-name span { color: var(--muted); font-size: 12px; }
@@ -208,7 +235,12 @@ legend { margin-bottom: 8px; color: #46565e; font-size: 12px; font-weight: 700; 
 .contact-level.level-c { color: #315c70; background: #eaf2f6; }
 .contact-level.level-d { color: #68767d; background: #f0f2f3; }
 .contact-placeholder, .contact-cell > .text-button { display: block; margin-top: 2px; }
-.score { font-weight: 800; color: var(--accent); }
+.score { font-weight: 800; color: var(--accent); white-space: nowrap; }
+.score strong, .score-meta { display: block; }
+.score-meta { margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 500; white-space: normal; }
+.score-ai-reason { color: var(--muted); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
+.job-summary, .job-error { max-width: 520px; overflow-wrap: anywhere; }
+.job-error { margin-top: 5px; color: var(--danger); font-size: 12px; }
 
 .dialog { width: min(760px, calc(100% - 24px)); max-height: calc(100vh - 28px); padding: 0; border: 1px solid var(--line); border-radius: 7px; box-shadow: 0 24px 70px rgba(20, 35, 42, .25); }
 .dialog::backdrop { background: rgba(18, 29, 34, .45); }
@@ -230,6 +262,15 @@ legend { margin-bottom: 8px; color: #46565e; font-size: 12px; font-weight: 700; 
 .evidence-item { padding: 11px; border: 1px solid var(--line); border-radius: 5px; }
 .evidence-item a { color: var(--accent); font-weight: 700; text-decoration: none; }
 .evidence-item p { margin: 4px 0 0; color: var(--muted); }
+.ai-analysis { padding: 11px; border: 1px solid var(--line); border-radius: 5px; background: #fbfcfc; }
+.ai-analysis p { margin: 0 0 8px; color: var(--muted); }
+.ai-analysis p:last-child { margin-bottom: 0; }
+.ai-analysis-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 9px 0; }
+.ai-analysis-grid div { min-width: 0; padding: 8px; background: var(--surface-alt); border-radius: 4px; }
+.ai-analysis-grid span, .ai-analysis-grid strong { display: block; }
+.ai-analysis-grid span { color: var(--muted); font-size: 11px; }
+.ai-analysis-grid strong { margin-top: 2px; overflow-wrap: anywhere; }
+.ai-analysis ul { margin: 8px 0 0; padding-left: 18px; color: #46565e; font-size: 12px; }
 .candidate-review { margin-top: 20px; }
 .candidate-review h3 { margin-top: 0; }
 .verification-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
@@ -254,9 +295,10 @@ legend { margin-bottom: 8px; color: #46565e; font-size: 12px; font-weight: 700; 
   .nav-item { width: auto; min-width: 105px; text-align: center; }
   .sidebar-footer { display: none; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .overview-grid, .form-layout, .management-grid { grid-template-columns: 1fr; }
+  .overview-grid, .form-layout, .roles-layout, .management-grid { grid-template-columns: 1fr; }
   .source-health-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .candidate-date-filter { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 640px) {
@@ -266,8 +308,14 @@ legend { margin-bottom: 8px; color: #46565e; font-size: 12px; font-weight: 700; 
   .metrics { gap: 8px; }
   .metric { min-height: 88px; padding: 13px; }
   .metric strong { font-size: 25px; }
-  .field-grid, .filter-bar, .detail-grid, .verification-grid, .source-list, .source-health-list { grid-template-columns: 1fr; }
+  .field-grid, .filter-bar, .detail-grid, .verification-grid, .source-list, .source-health-list, .template-term-grid, .ai-analysis-grid { grid-template-columns: 1fr; }
+  .candidate-date-filter { grid-template-columns: 1fr; }
+  .candidate-date-filter .button, .candidate-date-filter input, .candidate-date-filter select { width: 100%; }
   .filter-search { grid-column: auto; }
+  .candidate-section-heading { align-items: stretch; }
+  .candidate-heading-actions { justify-content: space-between; }
+  .candidate-heading-actions .button { flex: 1 1 100%; }
+  .ai-batch-progress-header { align-items: flex-start; flex-direction: column; gap: 2px; }
   .preference-field { align-items: flex-start; }
   .panel { padding: 14px; }
   .pagination { justify-content: space-between; }

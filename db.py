@@ -3,7 +3,7 @@ import os
 import re
 import sqlite3
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -27,6 +27,10 @@ AGENT_EXPERIENCE_STATUSES = {
 }
 CONTACT_STAGES = {"未联系", "已联系", "已回复", "进入面试", "已发 Offer", "已录用", "不再推进"}
 PUBLIC_EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+CANDIDATE_FILTER_DATE_PATTERN = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$", re.ASCII)
+CANDIDATE_FILTER_DATE_MIN = date(2000, 1, 1)
+CANDIDATE_FILTER_DATE_MAX = date(2100, 12, 31)
+BEIJING_TIMEZONE = timezone(timedelta(hours=8))
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -61,6 +65,40 @@ def safe_public_email(value: Any) -> str:
     ):
         return ""
     return email
+
+
+def _parse_candidate_filter_date(value: Any, label: str) -> Optional[date]:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not CANDIDATE_FILTER_DATE_PATTERN.fullmatch(value):
+        raise ValueError("{}格式无效，请使用 YYYY-MM-DD".format(label))
+    try:
+        selected_date = date.fromisoformat(value)
+    except ValueError:
+        raise ValueError("{}格式无效，请使用 YYYY-MM-DD".format(label)) from None
+    if not CANDIDATE_FILTER_DATE_MIN <= selected_date <= CANDIDATE_FILTER_DATE_MAX:
+        raise ValueError("日期必须在 2000-01-01 至 2100-12-31 之间")
+    return selected_date
+
+
+def _candidate_date_bounds(filters: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    start_date = _parse_candidate_filter_date(filters.get("last_seen_from"), "开始日期")
+    end_date = _parse_candidate_filter_date(filters.get("last_seen_to"), "结束日期")
+    if start_date and end_date and start_date > end_date:
+        raise ValueError("开始日期不能晚于结束日期")
+    start_boundary = (
+        datetime.combine(start_date, datetime.min.time(), BEIJING_TIMEZONE).isoformat(timespec="seconds")
+        if start_date
+        else None
+    )
+    end_boundary = (
+        datetime.combine(end_date + timedelta(days=1), datetime.min.time(), BEIJING_TIMEZONE).isoformat(
+            timespec="seconds"
+        )
+        if end_date
+        else None
+    )
+    return start_boundary, end_boundary
 
 
 def candidate_order_sql(alias: str = "") -> str:
@@ -193,7 +231,21 @@ def init_db() -> None:
         error TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         started_at TEXT,
-        completed_at TEXT
+        completed_at TEXT,
+        target_count INTEGER NOT NULL DEFAULT 0,
+        discovered_count INTEGER NOT NULL DEFAULT 0,
+        unique_count INTEGER NOT NULL DEFAULT 0,
+        duplicate_count INTEGER NOT NULL DEFAULT 0,
+        filtered_count INTEGER NOT NULL DEFAULT 0,
+        inserted_count INTEGER NOT NULL DEFAULT 0,
+        existing_count INTEGER NOT NULL DEFAULT 0,
+        source_success_count INTEGER NOT NULL DEFAULT 0,
+        source_failure_count INTEGER NOT NULL DEFAULT 0,
+        source_stats_json TEXT NOT NULL DEFAULT '[]',
+        ai_requested INTEGER NOT NULL DEFAULT 0,
+        ai_completed_count INTEGER NOT NULL DEFAULT 0,
+        ai_fallback_count INTEGER NOT NULL DEFAULT 0,
+        ai_disabled_count INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS job_candidates (
@@ -301,6 +353,50 @@ def init_db() -> None:
                 connection.execute(
                     "ALTER TABLE schedules ADD COLUMN {} {}".format(column, definition)
                 )
+        job_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        job_migrations = {
+            "target_count": "INTEGER NOT NULL DEFAULT 0",
+            "discovered_count": "INTEGER NOT NULL DEFAULT 0",
+            "unique_count": "INTEGER NOT NULL DEFAULT 0",
+            "duplicate_count": "INTEGER NOT NULL DEFAULT 0",
+            "filtered_count": "INTEGER NOT NULL DEFAULT 0",
+            "inserted_count": "INTEGER NOT NULL DEFAULT 0",
+            "existing_count": "INTEGER NOT NULL DEFAULT 0",
+            "source_success_count": "INTEGER NOT NULL DEFAULT 0",
+            "source_failure_count": "INTEGER NOT NULL DEFAULT 0",
+            "source_stats_json": "TEXT NOT NULL DEFAULT '[]'",
+            "ai_requested": "INTEGER NOT NULL DEFAULT 0",
+            "ai_completed_count": "INTEGER NOT NULL DEFAULT 0",
+            "ai_fallback_count": "INTEGER NOT NULL DEFAULT 0",
+            "ai_disabled_count": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for column, definition in job_migrations.items():
+            if column not in job_columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN {} {}".format(column, definition)
+                )
+        # Backfill only the two fields that can be reconstructed safely from
+        # the immutable task configuration. Newer detailed metrics remain zero
+        # for historical tasks rather than being guessed.
+        old_job_rows = connection.execute(
+            "SELECT id, config_json, target_count, ai_requested FROM jobs"
+        ).fetchall()
+        for row in old_job_rows:
+            try:
+                old_config = json.loads(row["config_json"] or "{}")
+            except (TypeError, ValueError):
+                old_config = {}
+            target_count = int(old_config.get("target") or 0)
+            ai_requested = 1 if old_config.get("use_local_ai") else 0
+            if (not row["target_count"] and target_count) or (
+                not row["ai_requested"] and ai_requested
+            ):
+                connection.execute(
+                    "UPDATE jobs SET target_count = ?, ai_requested = ? WHERE id = ?",
+                    (target_count, ai_requested, row["id"]),
+                )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_candidates_archived ON candidates(archived_at)"
         )
@@ -309,6 +405,9 @@ def init_db() -> None:
         )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_candidates_template ON candidates(role_template_id)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_candidates_ai_status ON candidates(ai_match_status)"
         )
         _seed_builtin_role_templates(connection)
         contact_rows = connection.execute(
@@ -455,6 +554,12 @@ def update_role_template(identifier: Any, payload: Dict[str, Any]) -> Optional[D
     if not current:
         return None
     normalized = normalize_template(payload, partial=True)
+    if (
+        current["is_builtin"]
+        and "slug" in normalized
+        and normalized["slug"] != current["slug"]
+    ):
+        raise ValueError("内置岗位模板的标识不可修改")
     merged = dict(current)
     merged.update(normalized)
     timestamp = now_iso()
@@ -495,15 +600,25 @@ def create_job(kind: str, config: Dict[str, Any]) -> int:
     with connect() as connection:
         cursor = connection.execute(
             """
-            INSERT INTO jobs (kind, config_json, created_at)
-            VALUES (?, ?, ?)
+            INSERT INTO jobs (kind, config_json, target_count, ai_requested, created_at)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (kind, json.dumps(config, ensure_ascii=False), now_iso()),
+            (
+                kind,
+                json.dumps(config, ensure_ascii=False),
+                int(config.get("target") or 0),
+                1 if config.get("use_local_ai") else 0,
+                now_iso(),
+            ),
         )
         return int(cursor.lastrowid)
 
 
 def update_job(job_id: int, **fields: Any) -> None:
+    if "source_stats" in fields:
+        fields["source_stats_json"] = json.dumps(
+            fields.pop("source_stats") or [], ensure_ascii=False
+        )
     allowed = {
         "status",
         "progress",
@@ -512,6 +627,20 @@ def update_job(job_id: int, **fields: Any) -> None:
         "error",
         "started_at",
         "completed_at",
+        "target_count",
+        "discovered_count",
+        "unique_count",
+        "duplicate_count",
+        "filtered_count",
+        "inserted_count",
+        "existing_count",
+        "source_success_count",
+        "source_failure_count",
+        "source_stats_json",
+        "ai_requested",
+        "ai_completed_count",
+        "ai_fallback_count",
+        "ai_disabled_count",
     }
     values = {key: value for key, value in fields.items() if key in allowed}
     if not values:
@@ -522,12 +651,29 @@ def update_job(job_id: int, **fields: Any) -> None:
         connection.execute("UPDATE jobs SET {} WHERE id = ?".format(assignments), params)
 
 
+def _decode_job(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    config = json.loads(item.pop("config_json") or "{}")
+    item["config"] = config
+    raw_stats = item.pop("source_stats_json", "[]")
+    try:
+        item["source_stats"] = json.loads(raw_stats or "[]")
+    except (TypeError, ValueError):
+        item["source_stats"] = []
+    if not item.get("target_count"):
+        item["target_count"] = int(config.get("target") or 0)
+    item["ai_requested"] = bool(
+        item.get("ai_requested") or config.get("use_local_ai") or config.get("enable_ai")
+    )
+    return item
+
+
 def get_job(job_id: int) -> Optional[Dict[str, Any]]:
     with connect() as connection:
-        job = row_to_dict(connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
-        if not job:
+        row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
             return None
-        job["config"] = json.loads(job.pop("config_json"))
+        job = _decode_job(row)
         job["candidates"] = [
             dict(row)
             for row in connection.execute(
@@ -552,12 +698,7 @@ def list_jobs(limit: int = 30) -> List[Dict[str, Any]]:
         rows = connection.execute(
             "SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
-    jobs = []
-    for row in rows:
-        item = dict(row)
-        item["config"] = json.loads(item.pop("config_json"))
-        jobs.append(item)
-    return jobs
+    return [_decode_job(row) for row in rows]
 
 
 def job_cancel_requested(job_id: int) -> bool:
@@ -792,6 +933,7 @@ def set_public_email(candidate_id: int, email: str, source_url: str) -> bool:
 
 
 def list_candidates(filters: Dict[str, Any]) -> Dict[str, Any]:
+    start_boundary, end_boundary = _candidate_date_bounds(filters)
     clauses = []
     params: List[Any] = []
     archived = str(filters.get("archived") or "active").strip()
@@ -799,6 +941,12 @@ def list_candidates(filters: Dict[str, Any]) -> Dict[str, Any]:
         clauses.append("archived_at IS NOT NULL")
     elif archived != "all":
         clauses.append("archived_at IS NULL")
+    if start_boundary:
+        clauses.append("julianday(last_seen_at) >= julianday(?)")
+        params.append(start_boundary)
+    if end_boundary:
+        clauses.append("julianday(last_seen_at) < julianday(?)")
+        params.append(end_boundary)
     for key, column in (
         ("status", "review_status"),
         ("source", "source"),
@@ -862,6 +1010,137 @@ def get_candidate(candidate_id: int) -> Optional[Dict[str, Any]]:
             ).fetchall()
         ]
         return candidate
+
+
+def list_candidates_needing_ai(
+    limit: int = 300,
+    *,
+    include_archived: bool = False,
+) -> List[Dict[str, Any]]:
+    """Return candidate records whose local AI analysis is not complete.
+
+    The full candidate record (including public project evidence) is returned
+    so the re-analysis worker can pass it to ``ollama_matcher``.  Contact
+    fields remain in the database record but are deliberately ignored by the
+    matcher payload; keeping this selection in the database layer also avoids
+    exposing a second ad-hoc candidate query to the HTTP handler.
+    """
+    if isinstance(limit, bool):
+        raise ValueError("AI 重分析数量必须是整数")
+    try:
+        bounded_limit = int(limit)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("AI 重分析数量必须是整数") from exc
+    if bounded_limit < 1 or bounded_limit > 300:
+        raise ValueError("AI 重分析数量必须在 1 到 300 之间")
+    clauses = ["COALESCE(ai_match_status, '') <> '已完成'"]
+    if not include_archived:
+        clauses.append("archived_at IS NULL")
+    where = " AND ".join(clauses)
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT id FROM candidates WHERE {} ORDER BY id LIMIT ?".format(where),
+            (bounded_limit,),
+        ).fetchall()
+    candidates: List[Dict[str, Any]] = []
+    for row in rows:
+        candidate = get_candidate(int(row["id"]))
+        if candidate:
+            candidates.append(candidate)
+    return candidates
+
+
+def update_candidate_ai_match(
+    candidate_id: int,
+    *,
+    status: str,
+    combined_score: int,
+    ai_score: Optional[int] = None,
+    confidence: Optional[float] = None,
+    reason: str = "",
+    evidence: Optional[List[Dict[str, Any]]] = None,
+    model: str = "",
+    matched_at: Optional[str] = None,
+) -> bool:
+    """Persist only AI-derived fields for an existing candidate.
+
+    Review state and contact fields are intentionally not touched.  This is
+    used by the background re-analysis worker after the candidate has already
+    entered the talent pool, so a model retry cannot erase human verification
+    or public contact evidence.
+    """
+    status = str(status or "").strip()
+    if not status or len(status) > 100:
+        raise ValueError("AI 分析状态无效")
+    try:
+        combined = max(0, min(100, int(combined_score)))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("AI 综合分数无效") from exc
+    normalized_ai: Optional[int]
+    if ai_score is None:
+        normalized_ai = None
+    else:
+        try:
+            normalized_ai = max(0, min(100, int(ai_score)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("AI 分数无效") from exc
+    normalized_confidence: Optional[float]
+    if confidence is None:
+        normalized_confidence = None
+    else:
+        try:
+            normalized_confidence = max(0.0, min(1.0, float(confidence)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("AI 置信度无效") from exc
+    normalized_evidence = evidence if isinstance(evidence, list) else []
+    timestamp = now_iso()
+    with connect() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE candidates SET
+                match_score = ?, ai_match_score = ?, ai_match_status = ?,
+                ai_match_confidence = ?, ai_match_reason = ?,
+                ai_match_evidence_json = ?, ai_match_model = ?, ai_match_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                combined,
+                normalized_ai,
+                status,
+                normalized_confidence,
+                str(reason or "")[:2000],
+                json.dumps(normalized_evidence[:30], ensure_ascii=False),
+                str(model or "")[:120],
+                str(matched_at or "")[:80] or None,
+                timestamp,
+                int(candidate_id),
+            ),
+        )
+        return cursor.rowcount > 0
+
+
+def link_job_candidate(job_id: int, candidate_id: int) -> None:
+    """Associate a candidate with a background job for task inspection."""
+    with connect() as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO job_candidates(job_id, candidate_id) VALUES (?, ?)",
+            (int(job_id), int(candidate_id)),
+        )
+
+
+def active_job_id(kind: str) -> Optional[int]:
+    """Return the latest still-running job of ``kind``, if any."""
+    with connect() as connection:
+        row = connection.execute(
+            """
+            SELECT id FROM jobs
+            WHERE kind = ? AND status IN ('等待执行', '正在采集', '正在分析', '请求取消')
+            ORDER BY id DESC LIMIT 1
+            """,
+            (str(kind),),
+        ).fetchone()
+    return int(row["id"]) if row else None
 
 
 def review_candidate(
@@ -1220,14 +1499,31 @@ def report_candidates() -> List[Dict[str, Any]]:
     return [_candidate_dict(row) for row in rows]
 
 
-def export_candidates() -> List[Dict[str, Any]]:
+def export_candidates(filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    active_filters = filters or {}
+    start_boundary, end_boundary = _candidate_date_bounds(active_filters)
+    candidate_clauses = ["archived_at IS NULL"]
+    evidence_clauses = ["c.archived_at IS NULL"]
+    params: List[Any] = []
+    if start_boundary:
+        candidate_clauses.append("julianday(last_seen_at) >= julianday(?)")
+        evidence_clauses.append("julianday(c.last_seen_at) >= julianday(?)")
+        params.append(start_boundary)
+    if end_boundary:
+        candidate_clauses.append("julianday(last_seen_at) < julianday(?)")
+        evidence_clauses.append("julianday(c.last_seen_at) < julianday(?)")
+        params.append(end_boundary)
+    candidate_where = " AND ".join(candidate_clauses)
+    evidence_where = " AND ".join(evidence_clauses)
     with connect() as connection:
+        connection.execute("BEGIN")
         rows = connection.execute(
             """
             SELECT * FROM candidates
-            WHERE archived_at IS NULL
+            WHERE {}
             ORDER BY {}
-            """.format(candidate_order_sql())
+            """.format(candidate_where, candidate_order_sql()),
+            params,
         ).fetchall()
         candidates = [_candidate_dict(row) for row in rows]
         evidence_rows = connection.execute(
@@ -1235,9 +1531,10 @@ def export_candidates() -> List[Dict[str, Any]]:
             SELECT e.*, c.display_name AS candidate_name
             FROM evidence e
             JOIN candidates c ON c.id = e.candidate_id
-            WHERE c.archived_at IS NULL
+            WHERE {}
             ORDER BY e.candidate_id, e.is_fork, e.stars DESC, e.id
-            """
+            """.format(evidence_where),
+            params,
         ).fetchall()
     evidence_by_candidate: Dict[int, List[Dict[str, Any]]] = {}
     for row in evidence_rows:

@@ -140,7 +140,7 @@ tbody tr:hover { background: #fbfcfc; }
 .field-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .field-wide { grid-column: 1 / -1; }
 .field { display: grid; gap: 6px; }
-.field > span, .filter-bar label > span { color: #46565e; font-size: 12px; font-weight: 700; }
+.field > span, .filter-bar label > span, .candidate-date-filter label > span { color: #46565e; font-size: 12px; font-weight: 700; }
 input, select, textarea { width: 100%; border: 1px solid #cbd5d9; border-radius: 5px; color: var(--text); background: #fff; }
 input, select { min-height: 38px; padding: 7px 9px; }
 textarea { resize: vertical; padding: 9px; }
@@ -205,8 +205,23 @@ legend { margin-bottom: 8px; color: #46565e; font-size: 12px; font-weight: 700; 
 .archived-table { min-width: 850px; }
 .archived-table .muted { color: var(--muted); font-size: 12px; }
 
-.filter-bar { display: grid; grid-template-columns: minmax(180px, 2fr) repeat(5, minmax(120px, 1fr)) auto; align-items: end; gap: 10px; margin-bottom: 14px; }
+.filter-bar { display: grid; grid-template-columns: minmax(180px, 2fr) repeat(5, minmax(120px, 1fr)); align-items: end; gap: 10px; margin-bottom: 10px; }
 .filter-bar label { display: grid; gap: 5px; }
+.candidate-date-filter { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)) repeat(2, auto); align-items: end; gap: 10px; margin-bottom: 14px; min-width: 0; }
+.candidate-date-filter label { display: grid; min-width: 0; gap: 5px; }
+.candidate-date-filter .button { min-height: 38px; }
+.candidate-section-heading { align-items: flex-start; }
+.candidate-heading-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.ai-batch-progress { display: grid; gap: 7px; margin: -2px 0 15px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 5px; background: #f8fafb; }
+.ai-batch-progress.hidden { display: none; }
+.ai-batch-progress-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ai-batch-progress-header strong { overflow-wrap: anywhere; }
+.ai-batch-progress-header span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.ai-batch-progress-bar { width: 100%; height: 8px; }
+.ai-batch-progress-bar span { transition: width .2s ease; }
+.ai-batch-progress[data-state="error"] { border-color: #f0c6c1; background: var(--danger-soft); }
+.ai-batch-progress[data-state="error"] .progress span { background: var(--danger); }
+.ai-batch-progress[data-state="complete"] { border-color: #b9e2db; background: var(--accent-soft); }
 .candidate-table { min-width: 1240px; }
 .candidate-name strong, .candidate-name span { display: block; }
 .candidate-name span { color: var(--muted); font-size: 12px; }
@@ -223,6 +238,9 @@ legend { margin-bottom: 8px; color: #46565e; font-size: 12px; font-weight: 700; 
 .score { font-weight: 800; color: var(--accent); white-space: nowrap; }
 .score strong, .score-meta { display: block; }
 .score-meta { margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 500; white-space: normal; }
+.score-ai-reason { color: var(--muted); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
+.job-summary, .job-error { max-width: 520px; overflow-wrap: anywhere; }
+.job-error { margin-top: 5px; color: var(--danger); font-size: 12px; }
 
 .dialog { width: min(760px, calc(100% - 24px)); max-height: calc(100vh - 28px); padding: 0; border: 1px solid var(--line); border-radius: 7px; box-shadow: 0 24px 70px rgba(20, 35, 42, .25); }
 .dialog::backdrop { background: rgba(18, 29, 34, .45); }
@@ -280,6 +298,7 @@ legend { margin-bottom: 8px; color: #46565e; font-size: 12px; font-weight: 700; 
   .overview-grid, .form-layout, .roles-layout, .management-grid { grid-template-columns: 1fr; }
   .source-health-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .candidate-date-filter { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 640px) {
@@ -290,7 +309,13 @@ legend { margin-bottom: 8px; color: #46565e; font-size: 12px; font-weight: 700; 
   .metric { min-height: 88px; padding: 13px; }
   .metric strong { font-size: 25px; }
   .field-grid, .filter-bar, .detail-grid, .verification-grid, .source-list, .source-health-list, .template-term-grid, .ai-analysis-grid { grid-template-columns: 1fr; }
+  .candidate-date-filter { grid-template-columns: 1fr; }
+  .candidate-date-filter .button, .candidate-date-filter input, .candidate-date-filter select { width: 100%; }
   .filter-search { grid-column: auto; }
+  .candidate-section-heading { align-items: stretch; }
+  .candidate-heading-actions { justify-content: space-between; }
+  .candidate-heading-actions .button { flex: 1 1 100%; }
+  .ai-batch-progress-header { align-items: flex-start; flex-direction: column; gap: 2px; }
   .preference-field { align-items: flex-start; }
   .panel { padding: 14px; }
   .pagination { justify-content: space-between; }

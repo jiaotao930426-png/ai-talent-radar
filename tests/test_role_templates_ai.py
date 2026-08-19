@@ -45,6 +45,30 @@ class RoleTemplateDatabaseTests(unittest.TestCase):
         self.assertFalse(db.set_role_template_active(template["id"], False)["is_active"])
         self.assertIsNone(db.get_role_template("AI 研究工程师", require_active=True))
 
+        renamed = db.update_role_template(template["id"], {"slug": "ai-research-platform"})
+        self.assertEqual(renamed["slug"], "ai-research-platform")
+
+    def test_builtin_slug_is_stable_after_rename_and_restart(self) -> None:
+        template = db.get_role_template("ai-agent-engineer")
+        self.assertIsNotNone(template)
+
+        updated = db.update_role_template(template["id"], {"name": "智能体平台工程师"})
+        self.assertEqual(updated["slug"], "ai-agent-engineer")
+        with self.assertRaisesRegex(ValueError, "内置岗位模板的标识不可修改"):
+            db.update_role_template(template["id"], {"slug": "renamed-agent-role"})
+
+        db.init_db()
+        templates = db.list_role_templates()
+        self.assertEqual(len(templates), 3)
+        self.assertEqual(
+            [item["slug"] for item in templates].count("ai-agent-engineer"),
+            1,
+        )
+        self.assertEqual(
+            db.get_role_template("ai-agent-engineer")["name"],
+            "智能体平台工程师",
+        )
+
     def test_scheduled_config_keeps_snapshot_after_template_changes(self) -> None:
         template = db.create_role_template(
             {
@@ -202,15 +226,68 @@ class OllamaMatcherTests(unittest.TestCase):
         payload = ollama_matcher._public_payload(
             {
                 "display_name": "Candidate",
+                "username": "candidate-user",
                 "bio": "agent",
+                "company": "Example Company",
+                "city": "北京",
                 "contact_email": "candidate@example.test",
                 "phone": "13800000000",
                 "evidence": [],
             },
             {"name": "AI Agent 工程师"},
         )
+        self.assertNotIn("Candidate", str(payload))
+        self.assertNotIn("candidate-user", str(payload))
+        self.assertNotIn("Example Company", str(payload))
+        self.assertNotIn("北京", str(payload))
         self.assertNotIn("contact_email", str(payload))
         self.assertNotIn("13800000000", str(payload))
+
+    def test_public_payload_redacts_contacts_embedded_in_public_text(self) -> None:
+        payload = ollama_matcher._public_payload(
+            {
+                "bio": "agent contact candidate@example.test 13800138000",
+                "evidence": [
+                    {
+                        "title": "agent project",
+                        "description": "maintainer: owner@example.org / 13912345678",
+                        "url": "https://example.test/project",
+                    }
+                ],
+            },
+            {"name": "AI Agent 工程师", "description": "owner@example.net"},
+        )
+        payload_text = str(payload)
+        for value in (
+            "candidate@example.test",
+            "owner@example.org",
+            "owner@example.net",
+            "13800138000",
+            "13912345678",
+        ):
+            self.assertNotIn(value, payload_text)
+        self.assertIn("公开邮箱已隐藏", payload_text)
+        self.assertIn("公开电话已隐藏", payload_text)
+
+    def test_model_text_output_is_redacted_before_persistence(self) -> None:
+        parsed = ollama_matcher._parse_json(
+            '{"match_score": 70, "confidence": 0.5, '
+            '"matched_skills": ["agent@example.test"], '
+            '"evidence": [{"title": "owner@example.org", "url": "https://example.test/p", '
+            '"reason": "call 13800138000"}], '
+            '"gaps": ["13912345678"], "summary": "email owner@example.net"}'
+        )
+        parsed_text = str(parsed)
+        for value in (
+            "agent@example.test",
+            "owner@example.org",
+            "owner@example.net",
+            "13800138000",
+            "13912345678",
+        ):
+            self.assertNotIn(value, parsed_text)
+        self.assertIn("公开邮箱已隐藏", parsed_text)
+        self.assertIn("公开电话已隐藏", parsed_text)
 
     def test_json_parser_and_score_combination_are_bounded(self) -> None:
         result = ollama_matcher._parse_json(
@@ -246,6 +323,83 @@ class OllamaMatcherTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "本机"):
                 ollama_matcher._base_url()
 
+    def test_native_ollama_is_started_once_and_model_is_checked(self) -> None:
+        key = "http://127.0.0.1:11434|qwen3:4b"
+        ollama_matcher._HEALTHY_CACHE.clear()
+        ollama_matcher._START_ATTEMPTS.clear()
+        ollama_matcher._START_ERRORS.clear()
+        with patch.dict(
+            os.environ,
+            {
+                "OLLAMA_BASE_URL": "http://127.0.0.1:11434",
+                "OLLAMA_MODEL": "qwen3:4b",
+                "OLLAMA_AUTOSTART": "true",
+            },
+            clear=True,
+        ), patch.object(
+            ollama_matcher,
+            "_tags",
+            side_effect=[ollama_matcher.OllamaUnavailable("offline"), ["qwen3:4b"]],
+        ) as tags, patch.object(
+            ollama_matcher, "_ollama_binary", return_value="/usr/local/bin/ollama"
+        ), patch.object(ollama_matcher, "_start_ollama") as start:
+            ollama_matcher.ensure_ollama_available(timeout=1)
+            ollama_matcher.ensure_ollama_available(timeout=1)
+        start.assert_called_once_with("/usr/local/bin/ollama")
+        self.assertEqual(tags.call_count, 2)
+        self.assertIn(key, ollama_matcher._HEALTHY_CACHE)
+
+    def test_ollama_missing_model_is_reported_without_pull(self) -> None:
+        ollama_matcher._HEALTHY_CACHE.clear()
+        with patch.dict(
+            os.environ,
+            {
+                "OLLAMA_BASE_URL": "http://127.0.0.1:11434",
+                "OLLAMA_MODEL": "qwen3:4b",
+                "OLLAMA_AUTOSTART": "true",
+            },
+            clear=True,
+        ), patch.object(ollama_matcher, "_tags", return_value=["llama3:8b"]), patch.object(
+            ollama_matcher, "_start_ollama"
+        ) as start:
+            with self.assertRaisesRegex(ollama_matcher.OllamaUnavailable, "未找到模型"):
+                ollama_matcher.ensure_ollama_available(timeout=1)
+        start.assert_not_called()
+
+    def test_matcher_uses_hardware_tolerant_default_timeout(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                result = {
+                    "match_score": 70,
+                    "confidence": 0.5,
+                    "matched_skills": ["agent"],
+                    "evidence": [],
+                    "gaps": [],
+                    "summary": "ok",
+                }
+                return json.dumps({"response": json.dumps(result)}).encode("utf-8")
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch(
+                "ollama_matcher.urllib.request.urlopen", return_value=Response()
+            ) as mocked_urlopen, patch(
+                "ollama_matcher.ensure_ollama_available"
+            ):
+                ollama_matcher.match_candidate(
+                    {"bio": "agent", "evidence": []}, {"name": "Agent"}
+                )
+        self.assertEqual(
+            mocked_urlopen.call_args.kwargs["timeout"],
+            ollama_matcher.DEFAULT_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(ollama_matcher.DEFAULT_TIMEOUT_SECONDS, 240)
+
     def test_compose_passes_docker_host_ollama_configuration(self) -> None:
         compose = (Path(__file__).resolve().parents[1] / "compose.yaml").read_text(
             encoding="utf-8"
@@ -258,6 +412,12 @@ class OllamaMatcherTests(unittest.TestCase):
             ollama_matcher._parse_json(
                 '{"match_score": 0, "confidence": 0, "matched_skills": [], '
                 '"evidence": [], "gaps": [], "summary": ""}'
+            )
+
+    def test_json_parser_rejects_qwen_input_echo(self) -> None:
+        with self.assertRaisesRegex(ValueError, "回显了输入数据"):
+            ollama_matcher._parse_json(
+                '{"role_template": {"name": "Agent"}, "candidate": {"bio": "agent"}}'
             )
 
     def test_matcher_drops_model_citations_not_in_public_evidence(self) -> None:
@@ -286,7 +446,9 @@ class OllamaMatcherTests(unittest.TestCase):
             "bio": "agent",
             "evidence": [{"title": "real", "url": "https://example.test/real"}],
         }
-        with patch("ollama_matcher.urllib.request.urlopen", return_value=Response()):
+        with patch("ollama_matcher.urllib.request.urlopen", return_value=Response()), patch(
+            "ollama_matcher.ensure_ollama_available"
+        ):
             result = ollama_matcher.match_candidate(candidate, {"name": "Agent"})
         self.assertEqual(result["evidence"], [])
 
@@ -309,7 +471,9 @@ class OllamaMatcherTests(unittest.TestCase):
                 }
                 return json.dumps({"response": "", "thinking": json.dumps(result)}).encode("utf-8")
 
-        with patch("ollama_matcher.urllib.request.urlopen", return_value=Response()):
+        with patch("ollama_matcher.urllib.request.urlopen", return_value=Response()), patch(
+            "ollama_matcher.ensure_ollama_available"
+        ):
             result = ollama_matcher.match_candidate(
                 {"display_name": "Candidate", "evidence": []}, {"name": "Agent"}
             )

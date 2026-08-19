@@ -13,7 +13,9 @@ services:
       GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
       OLLAMA_BASE_URL: "${OLLAMA_DOCKER_BASE_URL:-http://host.docker.internal:11434}"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen3:4b}"
-      OLLAMA_TIMEOUT_SECONDS: "${OLLAMA_TIMEOUT_SECONDS:-45}"
+      OLLAMA_TIMEOUT_SECONDS: "${OLLAMA_TIMEOUT_SECONDS:-240}"
+      # A container must not try to start a process on the host.
+      OLLAMA_AUTOSTART: "false"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

@@ -1,6 +1,6 @@
 # AI Talent Radar
 
-当前稳定版本：[`v1.0.2`](https://github.com/jiaotao930426-png/ai-talent-radar/tree/v1.0.2)。默认 `main` 分支与该稳定标签保持一致。
+当前稳定版本：[`v1.0.3`](https://github.com/jiaotao930426-png/ai-talent-radar/tree/v1.0.3)。默认 `main` 分支与该稳定标签保持一致。
 
 AI Talent Radar 是一个本地优先的 AI 人才发现与审核工具。它从允许访问的公开技术资料中整理候选人线索，支持人工核验、联系进度、定时任务、本地报告和数据导出。
 
@@ -23,7 +23,7 @@ AI Talent Radar 是一个本地优先的 AI 人才发现与审核工具。它从
 - 每周定时采集、失败重试、任务取消和任务日志。
 - 候选人去重、匹配评分、首次与最近采集时间。
 - 可配置岗位模板：可新增、编辑、启用或停用岗位，并配置搜索词、必须技能、优选技能、项目证据词和排除词。
-- 可选本地语义匹配：手动或每周任务勾选“启用本地 AI 分析”后，先规则初筛，再调用本机 Ollama；Ollama 不可用时自动回退规则结果。
+- 可选本地语义匹配：手动或每周任务勾选“启用本地 AI 分析”后，先规则初筛，再调用本机 Ollama；原生启动时若服务未运行会自动启动 `ollama serve`，模型缺失不会偷偷下载，而是给出明确提示并回退规则结果。
 - 公开联系方式分级、人工核验和联系进度管理。
 - 本地 SQLite 存储、归档、备份和永久删除。
 - 本地 HTML 周报与可选 Excel 导出。
@@ -33,8 +33,8 @@ AI Talent Radar 是一个本地优先的 AI 人才发现与审核工具。它从
 
 当前自动采集器支持 GitHub、Gitee、GitLab、Hugging Face 和 Stack Overflow。界面中标记为“规划中”或“人工链接”的来源尚未实现自动采集器。
 
-岗位模板和 AI 匹配只使用候选人已经公开的简介、项目名称与项目说明。模型不会推断年龄、学历、电话、邮箱或工作意愿，也不会把本地候选人数据库发送到云端。
-原生 Python 启动默认访问 `127.0.0.1:11434`。Docker Compose 默认通过 `host.docker.internal:11434` 访问宿主机 Ollama；Docker Desktop 可直接使用该地址，Linux 还需要确保 Ollama 监听 Docker 宿主机网关且防火墙不向外网开放该端口。连接失败时系统会自动回退到规则匹配。
+岗位模板和 AI 匹配只使用岗位规则，以及候选人已经公开的简介、项目名称、项目说明、语言与项目链接；不会把姓名、账号、公司、城市或联系方式交给模型。模型不会推断年龄、学历、电话、邮箱或工作意愿，也不会把本地候选人数据库发送到云端。
+原生 Python 启动默认访问 `127.0.0.1:11434`，并默认启用 `OLLAMA_AUTOSTART=true`。系统会先检查服务和 `OLLAMA_MODEL`（默认 `qwen3:4b`），必要时只启动本机的 `ollama serve`，不会执行 `ollama pull`。Docker Compose 默认通过 `host.docker.internal:11434` 访问宿主机 Ollama，并强制关闭自动启动；Docker Desktop 可直接使用该地址，Linux 还需要确保 Ollama 监听 Docker 宿主机网关且防火墙不向外网开放该端口。连接失败或超时时系统会自动回退到规则匹配，并在候选人详情和任务日志中显示“不可用，已回退规则”，不会误标为“AI 未启用”。本地 4B 模型在内存较小的电脑上单个候选人可能需要 1 至 3 分钟，默认等待 240 秒，可通过环境变量调整。
 
 ## 系统要求
 
@@ -130,7 +130,9 @@ python tools/import_public_profile_emails.py
 | `OLLAMA_BASE_URL` | 否 | `http://127.0.0.1:11434` | 原生启动的本地 Ollama 地址；只允许回环地址或 Docker 宿主机地址。 |
 | `OLLAMA_DOCKER_BASE_URL` | 否 | `http://host.docker.internal:11434` | Docker Compose 访问宿主机 Ollama 的地址。 |
 | `OLLAMA_MODEL` | 否 | `qwen3:4b` | 本机 Ollama 模型名称，例如 `qwen3:4b`。 |
-| `OLLAMA_TIMEOUT_SECONDS` | 否 | `45` | 单个候选人的本地模型请求超时秒数。 |
+| `OLLAMA_TIMEOUT_SECONDS` | 否 | `240` | 单个候选人的本地模型请求超时秒数。 |
+| `OLLAMA_AUTOSTART` | 否 | `true`（原生）/ `false`（Docker） | 本机回环地址下，服务未运行时是否自动执行 `ollama serve`。 |
+| `OLLAMA_BIN` | 否 | 自动查找 | `ollama` 不在 PATH 时指定其绝对路径。 |
 
 不要把真实令牌写入代码、命令示例、`.env`、日志或 Issue。建议通过操作系统凭证管理工具或 CI 的加密 Secrets 注入凭证。应用的健康接口只返回 Token 是否已配置，不返回实际值。
 

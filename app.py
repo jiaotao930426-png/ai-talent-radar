@@ -16,7 +16,13 @@ sys.dont_write_bytecode = True
 
 import db
 from excel_export import generate_excel
-from jobs import JobManager, next_weekly_run, normalize_config
+from jobs import (
+    AIReanalysisInProgress,
+    AI_REANALYSIS_MAX_CANDIDATES,
+    JobManager,
+    next_weekly_run,
+    normalize_config,
+)
 from report import generate_report
 from source_health import get_source_health
 
@@ -93,7 +99,7 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_bytes(content, "text/html; charset=utf-8")
         elif path == "/export/candidates.xlsx":
             try:
-                content = generate_excel(db.export_candidates())
+                content = generate_excel(db.export_candidates(query))
                 self.send_bytes(
                     content,
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -113,7 +119,34 @@ class AppHandler(BaseHTTPRequestHandler):
         path = parsed.path
         try:
             payload = self.read_json()
-            if path == "/api/jobs":
+            if path == "/api/candidates/reanalyze-ai":
+                raw_limit = payload.get("limit", AI_REANALYSIS_MAX_CANDIDATES)
+                if isinstance(raw_limit, bool):
+                    raise ValueError("AI 重分析数量必须是整数")
+                try:
+                    limit = int(raw_limit)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("AI 重分析数量必须是整数") from exc
+                include_archived = payload.get("include_archived", False)
+                if not isinstance(include_archived, bool):
+                    raise ValueError("是否包含已归档候选人必须为布尔值")
+                job_id, selected_count = manager.submit_ai_reanalysis(
+                    limit,
+                    include_archived=include_archived,
+                )
+                self.send_json(
+                    {
+                        "job_id": job_id,
+                        "selected_count": selected_count,
+                        "message": (
+                            "已开始 AI 重分析"
+                            if selected_count
+                            else "人才池中没有需要重新分析的候选人"
+                        ),
+                    },
+                    HTTPStatus.ACCEPTED,
+                )
+            elif path == "/api/jobs":
                 job_id = manager.submit("手动采集", payload)
                 self.send_json({"job_id": job_id}, HTTPStatus.ACCEPTED)
             elif path == "/api/role-templates":
@@ -167,6 +200,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"reclaimed_bytes": db.vacuum_database()})
             else:
                 self.send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
+        except AIReanalysisInProgress as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
         except ValueError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:

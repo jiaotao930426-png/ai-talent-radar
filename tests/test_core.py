@@ -1825,9 +1825,9 @@ class AppHandlerTests(unittest.TestCase):
             os.environ["TALENT_RADAR_DB"] = self.previous_db
         self.temp_dir.cleanup()
 
-    def request_raw(self, method: str, path: str, payload=None):
+    def request_raw(self, method: str, path: str, payload=None, extra_headers=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
-        headers = {}
+        headers = dict(extra_headers or {})
         body = None
         if payload is not None:
             headers["Content-Type"] = "application/json"
@@ -1841,8 +1841,8 @@ class AppHandlerTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def request(self, method: str, path: str, payload=None):
-        status, headers, raw_bytes = self.request_raw(method, path, payload)
+    def request(self, method: str, path: str, payload=None, extra_headers=None):
+        status, headers, raw_bytes = self.request_raw(method, path, payload, extra_headers)
         content_type = headers.get("Content-Type", "").lower()
         is_textual = content_type.startswith("text/") or content_type.startswith(
             ("application/json", "application/javascript", "application/xml")
@@ -1992,6 +1992,32 @@ class AppHandlerTests(unittest.TestCase):
         )
         self.assertEqual(status, 404)
         self.assertEqual(payload["error"], "候选人不存在")
+
+    def test_write_accepts_loopback_origin_from_forwarded_host_port(self) -> None:
+        forwarded_port = self.server.server_port + 1
+        status, _, payload = self.request(
+            "PATCH",
+            "/api/candidates/999",
+            {"review_status": "待审核"},
+            {
+                "Host": "127.0.0.1:{}".format(forwarded_port),
+                "Origin": "http://127.0.0.1:{}".format(forwarded_port),
+            },
+        )
+
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["error"], "候选人不存在")
+
+    def test_write_rejects_non_loopback_forwarded_host_origin(self) -> None:
+        status, _, payload = self.request(
+            "PATCH",
+            "/api/candidates/999",
+            {"review_status": "待审核"},
+            {"Host": "example.test:18767", "Origin": "http://example.test:18767"},
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "请求来源无效")
 
     def test_schedule_request_is_normalized_at_api_boundary(self) -> None:
         status, _, payload = self.request(

@@ -70,7 +70,9 @@ class AppHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         query = {key: values[-1] for key, values in parse_qs(parsed.query).items()}
-        if path == "/api/overview":
+        if path == "/favicon.ico":
+            self.send_bytes(b"", "image/x-icon", HTTPStatus.NO_CONTENT)
+        elif path == "/api/overview":
             payload = db.overview()
             payload["schedule"] = db.get_schedule()
             self.send_json(payload)
@@ -345,6 +347,23 @@ class AppHandler(BaseHTTPRequestHandler):
                 "http://127.0.0.1:{}".format(port),
                 "http://localhost:{}".format(port),
             }
+            host_header = (self.headers.get("Host") or "").strip()
+            if host_header:
+                parsed_host = urlparse("//" + host_header)
+                try:
+                    forwarded_port = parsed_host.port
+                except ValueError:
+                    forwarded_port = None
+                if (
+                    (parsed_host.hostname or "").lower() in {"127.0.0.1", "localhost"}
+                    and forwarded_port
+                    and parsed_host.username is None
+                    and parsed_host.password is None
+                    and not parsed_host.path
+                ):
+                    allowed_origins.add(
+                        "http://{}:{}".format(parsed_host.hostname.lower(), forwarded_port)
+                    )
             if origin not in allowed_origins:
                 raise ValueError("请求来源无效")
         try:

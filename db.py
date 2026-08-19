@@ -47,6 +47,16 @@ def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _collection_timestamp(value: Any) -> str:
+    """Keep collection timestamps at second precision across SQLite builds."""
+    timestamp = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return timestamp
+    return parsed.isoformat(timespec="seconds")
+
+
 def safe_public_url(value: Any) -> str:
     url = str(value or "").strip()
     parsed = urllib.parse.urlparse(url)
@@ -748,7 +758,7 @@ def merge_existing_verified_contacts(candidates: Iterable[Dict[str, Any]]) -> No
 
 
 def upsert_candidate(candidate: Dict[str, Any], job_id: Optional[int] = None) -> Tuple[int, bool]:
-    timestamp = now_iso()
+    timestamp = _collection_timestamp(now_iso())
     profile_url = safe_public_url(candidate.get("profile_url"))
     if not profile_url:
         raise ValueError("候选人的公开主页链接无效")

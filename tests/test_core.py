@@ -1031,6 +1031,38 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(refreshed["first_seen_at"], first["first_seen_at"])
         self.assertEqual(refreshed["last_seen_at"], "2026-08-05T14:00:00+08:00")
 
+    def test_profile_refresh_without_ai_preserves_completed_ai_analysis(self) -> None:
+        analyzed = self.candidate()
+        analyzed.update(
+            {
+                "match_score": 90,
+                "rule_match_score": 88,
+                "ai_match_score": 92,
+                "ai_match_status": "已完成",
+                "ai_match_confidence": 0.91,
+                "ai_match_reason": "公开项目与岗位模板高度相关",
+                "ai_match_evidence": ["agent-kit"],
+                "ai_match_model": "qwen3:4b",
+                "ai_match_at": "2026-08-05T14:00:00+08:00",
+            }
+        )
+        candidate_id, _ = db.upsert_candidate(analyzed)
+
+        refreshed = self.candidate("Refreshed Name")
+        db.upsert_candidate(refreshed)
+
+        saved = db.get_candidate(candidate_id)
+        self.assertEqual(saved["display_name"], "Refreshed Name")
+        self.assertEqual(saved["match_score"], 90)
+        self.assertEqual(saved["rule_match_score"], 88)
+        self.assertEqual(saved["ai_match_score"], 92)
+        self.assertEqual(saved["ai_match_status"], "已完成")
+        self.assertEqual(saved["ai_match_confidence"], 0.91)
+        self.assertEqual(saved["ai_match_reason"], "公开项目与岗位模板高度相关")
+        self.assertEqual(saved["ai_match_evidence"], ["agent-kit"])
+        self.assertEqual(saved["ai_match_model"], "qwen3:4b")
+        self.assertEqual(saved["ai_match_at"], "2026-08-05T14:00:00+08:00")
+
     def test_manual_verification_survives_profile_refresh(self) -> None:
         candidate_id, _ = db.upsert_candidate(self.candidate())
         db.review_candidate(
@@ -1652,6 +1684,18 @@ class JobSelectionTests(unittest.TestCase):
         self.assertTrue(all(item["ai_match_status"] == "不可用，已回退规则" for item in job["candidates"]))
         self.assertIn("AI 回退 2", job["message"])
         self.assertIn("AI 原因 local model offline", job["message"])
+
+
+class AiMetricsTests(unittest.TestCase):
+    def test_disabled_ai_does_not_count_historical_completed_status(self) -> None:
+        metrics = jobs._ai_counts(
+            [{"ai_match_status": "已完成"}, {"ai_match_status": "不可用，已回退规则"}],
+            requested=False,
+        )
+        self.assertEqual(metrics["ai_requested"], 0)
+        self.assertEqual(metrics["ai_completed_count"], 0)
+        self.assertEqual(metrics["ai_fallback_count"], 0)
+        self.assertEqual(metrics["ai_disabled_count"], 2)
 
 
 class ExcelLinkTests(unittest.TestCase):

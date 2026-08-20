@@ -46,6 +46,36 @@ class ServerAddressTests(unittest.TestCase):
 
 
 class CrossPlatformCopyTests(unittest.TestCase):
+    def test_posix_launchers_are_executable_in_a_fresh_clone(self) -> None:
+        project_dir = Path(__file__).resolve().parents[1]
+        for relative_path in (
+            "scripts/start.sh",
+            "scripts/install-macos-launchd.sh",
+            "scripts/uninstall-macos-launchd.sh",
+        ):
+            with self.subTest(relative_path=relative_path):
+                mode = (project_dir / relative_path).stat().st_mode
+                self.assertTrue(mode & 0o111, "{} must be executable".format(relative_path))
+
+    def test_dockerignore_excludes_local_data_and_generated_artifacts(self) -> None:
+        project_dir = Path(__file__).resolve().parents[1]
+        dockerignore = (project_dir / ".dockerignore").read_text(encoding="utf-8")
+        required_patterns = (
+            "logs/",
+            "reports/",
+            "work/",
+            ".playwright-cli/",
+            "*.xlsx",
+            "*.xls",
+            "*.csv",
+            "*.tsv",
+            "*.tmp",
+            "*.bak",
+        )
+        for pattern in required_patterns:
+            with self.subTest(pattern=pattern):
+                self.assertIn(pattern, dockerignore)
+
     def test_frontend_does_not_reference_macos_application_support(self) -> None:
         project_dir = Path(__file__).resolve().parents[1]
         markup = (project_dir / "static" / "index.html").read_text(encoding="utf-8")

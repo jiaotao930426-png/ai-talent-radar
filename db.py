@@ -799,7 +799,10 @@ def upsert_candidate(candidate: Dict[str, Any], job_id: Optional[int] = None) ->
     with connect() as connection:
         existing = connection.execute(
             """
-            SELECT id, contact_email, contact_email_source_url, contact_email_verified_at
+            SELECT id, match_score, contact_email, contact_email_source_url,
+                   contact_email_verified_at, ai_match_score, ai_match_status,
+                   ai_match_confidence, ai_match_reason, ai_match_evidence_json,
+                   ai_match_model, ai_match_at
             FROM candidates WHERE source = ? AND external_id = ?
             """,
             (fields["source"], fields["external_id"]),
@@ -824,6 +827,25 @@ def upsert_candidate(candidate: Dict[str, Any], job_id: Optional[int] = None) ->
                 fields["contact_email"] = existing["contact_email"] or ""
                 fields["contact_email_source_url"] = existing["contact_email_source_url"] or ""
                 fields["contact_email_verified_at"] = existing["contact_email_verified_at"]
+            # A normal profile refresh does not run local AI. Preserve the
+            # prior analysis instead of turning a completed result into
+            # "未启用" and making the candidate appear pending again.
+            if fields["ai_match_status"] == "未启用":
+                if existing["ai_match_status"] == "已完成":
+                    # ``match_score`` is the displayed blended score. Keep it
+                    # paired with the historical AI result until a new AI run
+                    # explicitly recomputes the blend.
+                    fields["match_score"] = existing["match_score"]
+                for field in (
+                    "ai_match_score",
+                    "ai_match_status",
+                    "ai_match_confidence",
+                    "ai_match_reason",
+                    "ai_match_evidence_json",
+                    "ai_match_model",
+                    "ai_match_at",
+                ):
+                    fields[field] = existing[field]
         fields["contact_level"] = derive_contact_level(fields)
         if inserted:
             cursor = connection.execute(

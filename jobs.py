@@ -333,6 +333,12 @@ def _ai_counts(candidates: List[Dict[str, Any]], requested: bool) -> Dict[str, i
         "ai_fallback_count": 0,
         "ai_disabled_count": 0,
     }
+    if not requested:
+        # Counts describe this task, not a candidate's historical state. A
+        # refresh with AI disabled must not report an earlier AI result as a
+        # completion in the current task log.
+        counts["ai_disabled_count"] = len(candidates)
+        return counts
     for candidate in candidates:
         status = str(candidate.get("ai_match_status") or "未启用")
         if status == "已完成":

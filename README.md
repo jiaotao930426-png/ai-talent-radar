@@ -1,6 +1,6 @@
 # AI Talent Radar
 
-当前稳定版本：[`v1.0.4`](https://github.com/jiaotao930426-png/ai-talent-radar/tree/v1.0.4)。默认 `main` 分支与该稳定标签保持一致。
+当前稳定版本：[`v1.0.5`](https://github.com/jiaotao930426-png/ai-talent-radar/tree/v1.0.5)。默认 `main` 分支与该稳定标签保持一致。
 
 AI Talent Radar 是一个本地优先的 AI 人才发现与审核工具。它从允许访问的公开技术资料中整理候选人线索，支持人工核验、联系进度、定时任务、本地报告和数据导出。
 
